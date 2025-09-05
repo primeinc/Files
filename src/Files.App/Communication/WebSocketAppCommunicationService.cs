@@ -1,464 +1,491 @@
-using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace Files.App.Communication
 {
-    public sealed class WebSocketAppCommunicationService : IAppCommunicationService, IDisposable
-    {
-        private readonly HttpListener _httpListener;
-        private readonly RpcMethodRegistry _methodRegistry;
-        private readonly ILogger<WebSocketAppCommunicationService> _logger;
-        private readonly ConcurrentDictionary<Guid, ClientContext> _clients = new();
-        private readonly Timer _keepaliveTimer;
-        private readonly Timer _cleanupTimer;
-        private readonly CancellationTokenSource _cancellation = new();
-        
-        private string? _currentToken;
-        private int _currentEpoch;
-        private bool _isStarted;
+	public sealed class WebSocketAppCommunicationService : IAppCommunicationService, IDisposable
+	{
+		// Fields
+		private readonly HttpListener _httpListener;
+		private readonly RpcMethodRegistry _methodRegistry;
+		private readonly ILogger<WebSocketAppCommunicationService> _logger;
+		private readonly ConcurrentDictionary<Guid, ClientContext> _clients = new();
+		private readonly Timer _keepaliveTimer;
+		private readonly Timer _cleanupTimer;
+		private readonly CancellationTokenSource _cancellation = new();
+		private string? _currentToken;
+		private int _currentEpoch;
+		private bool _isStarted;
+		private bool _disposed;
 
-        public event Func<ClientContext, JsonRpcMessage, Task>? OnRequestReceived;
+		// Events
+		public event Func<ClientContext, JsonRpcMessage, Task>? OnRequestReceived;
 
-        public WebSocketAppCommunicationService(
-            RpcMethodRegistry methodRegistry,
-            ILogger<WebSocketAppCommunicationService> logger)
-        {
-            _methodRegistry = methodRegistry ?? throw new ArgumentNullException(nameof(methodRegistry));
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _httpListener = new HttpListener();
-            
-            // Setup keepalive timer (every 30 seconds)
-            _keepaliveTimer = new Timer(SendKeepalive, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
-            
-            // Setup cleanup timer (every 60 seconds)
-            _cleanupTimer = new Timer(CleanupInactiveClients, null, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60));
-        }
+		// Constructor
+		public WebSocketAppCommunicationService(
+			RpcMethodRegistry methodRegistry,
+			ILogger<WebSocketAppCommunicationService> logger)
+		{
+			_methodRegistry = methodRegistry ?? throw new ArgumentNullException(nameof(methodRegistry));
+			_logger = logger ?? throw new ArgumentNullException(nameof(logger));
+			_httpListener = new HttpListener();
 
-        public async Task StartAsync()
-        {
-            if (!ProtectedTokenStore.IsEnabled())
-            {
-                _logger.LogWarning("Remote control is not enabled, refusing to start WebSocket service");
-                return;
-            }
+			// Setup keepalive timer (every 30 seconds)
+			_keepaliveTimer = new Timer(SendKeepalive, null, TimeSpan.FromSeconds(30d), TimeSpan.FromSeconds(30d));
 
-            if (_isStarted)
-                return;
+			// Setup cleanup timer (every 60 seconds)
+			_cleanupTimer = new Timer(CleanupInactiveClients, null, TimeSpan.FromSeconds(60d), TimeSpan.FromSeconds(60d));
+		}
 
-            try
-            {
-                _currentToken = await ProtectedTokenStore.GetOrCreateTokenAsync();
-                _currentEpoch = ProtectedTokenStore.GetEpoch();
+		// Public methods
+		public async Task StartAsync()
+		{
+			if (!ProtectedTokenStore.IsEnabled())
+			{
+				_logger.LogWarning("Remote control is not enabled, refusing to start WebSocket service");
+				return;
+			}
 
-                _httpListener.Prefixes.Clear();
-                _httpListener.Prefixes.Add("http://127.0.0.1:52345/");
-                _httpListener.Start();
-                _isStarted = true;
+			if (_isStarted)
+				return;
 
-                _ = Task.Run(AcceptConnectionsAsync, _cancellation.Token);
-                
-                _logger.LogInformation("WebSocket IPC service started on http://127.0.0.1:52345/");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to start WebSocket IPC service");
-                throw;
-            }
-        }
+			try
+			{
+				_currentToken = await ProtectedTokenStore.GetOrCreateTokenAsync();
+				_currentEpoch = ProtectedTokenStore.GetEpoch();
 
-        public async Task StopAsync()
-        {
-            if (!_isStarted)
-                return;
+				_httpListener.Prefixes.Clear();
+				_httpListener.Prefixes.Add("http://127.0.0.1:52345/");
+				_httpListener.Start();
+				_isStarted = true;
 
-            try
-            {
-                _cancellation.Cancel();
-                _httpListener.Stop();
-                
-                // Close all client connections
-                foreach (var client in _clients.Values)
-                {
-                    client.Dispose();
-                }
-                _clients.Clear();
-                
-                _isStarted = false;
-                _logger.LogInformation("WebSocket IPC service stopped");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error stopping WebSocket IPC service");
-            }
-        }
+				_ = Task.Run(AcceptConnectionsAsync, _cancellation.Token);
 
-        private async Task AcceptConnectionsAsync()
-        {
-            while (!_cancellation.Token.IsCancellationRequested)
-            {
-                try
-                {
-                    var context = await _httpListener.GetContextAsync();
-                    if (context.Request.IsWebSocketRequest)
-                    {
-                        _ = Task.Run(() => HandleWebSocketConnection(context), _cancellation.Token);
-                    }
-                    else
-                    {
-                        context.Response.StatusCode = 400;
-                        context.Response.Close();
-                    }
-                }
-                catch (HttpListenerException) when (_cancellation.Token.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error accepting WebSocket connection");
-                }
-            }
-        }
+				_logger.LogInformation("WebSocket IPC service started on http://127.0.0.1:52345/");
+			}
+			catch (Exception ex)
+			{
+				_logger.LogError(ex, "Failed to start WebSocket IPC service");
+				throw;
+			}
+		}
 
-        private async Task HandleWebSocketConnection(HttpListenerContext httpContext)
-        {
-            WebSocketContext? webSocketContext = null;
-            ClientContext? client = null;
+		public async Task StopAsync()
+		{
+			if (!_isStarted)
+				return;
 
-            try
-            {
-                webSocketContext = await httpContext.AcceptWebSocketAsync(null);
-                var webSocket = webSocketContext.WebSocket;
-                
-                client = new ClientContext
-                {
-                    WebSocket = webSocket,
-                    Cancellation = CancellationTokenSource.CreateLinkedTokenSource(_cancellation.Token)
-                };
+			try
+			{
+				_cancellation.Cancel();
+				_httpListener.Stop();
 
-                _clients[client.Id] = client;
-                _logger.LogDebug("WebSocket client {ClientId} connected", client.Id);
+				// Close all client connections
+				foreach (var client in _clients.Values)
+				{
+					client.Dispose();
+				}
+				_clients.Clear();
 
-                // Start send loop
-                _ = Task.Run(() => ClientSendLoopAsync(client), client.Cancellation.Token);
+				_isStarted = false;
+				_logger.LogInformation("WebSocket IPC service stopped");
+			}
+			catch (Exception ex)
+			{
+				_logger.LogError(ex, "Error stopping WebSocket IPC service");
+			}
+		}
 
-                // Handle receive loop
-                await ClientReceiveLoopAsync(client);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error in WebSocket connection handler");
-            }
-            finally
-            {
-                if (client != null)
-                {
-                    _clients.TryRemove(client.Id, out _);
-                    client.Dispose();
-                    _logger.LogDebug("WebSocket client {ClientId} disconnected", client.Id);
-                }
-            }
-        }
+		public async Task SendResponseAsync(ClientContext client, JsonRpcMessage response)
+		{
+			if (client?.WebSocket?.State != WebSocketState.Open)
+				return;
 
-        private async Task ClientReceiveLoopAsync(ClientContext client)
-        {
-            var buffer = new byte[4096];
-            var messageBuilder = new StringBuilder();
-            var totalReceived = 0;
+			try
+			{
+				var json = response.ToJson();
+				var canEnqueue = client.TryEnqueue(json, false);
+				if (!canEnqueue)
+				{
+					_logger.LogWarning("Client {ClientId} queue full, dropping response", client.Id);
+				}
+			}
+			catch (Exception ex)
+			{
+				_logger.LogError(ex, "Error queuing response for client {ClientId}", client.Id);
+			}
+		}
 
-            try
-            {
-                while (client.WebSocket?.State == WebSocketState.Open && !client.Cancellation!.Token.IsCancellationRequested)
-                {
-                    var result = await client.WebSocket.ReceiveAsync(
-                        new ArraySegment<byte>(buffer), 
-                        client.Cancellation.Token);
+		public async Task BroadcastAsync(JsonRpcMessage notification)
+		{
+			if (!_isStarted)
+				return;
 
-                    if (result.MessageType == WebSocketMessageType.Close)
-                        break;
+			var json = notification.ToJson();
+			var activeclients = _clients.Values.Where(c => c.WebSocket?.State == WebSocketState.Open).ToList();
 
-                    if (result.MessageType != WebSocketMessageType.Text)
-                        continue;
+			foreach (var client in activeclients)
+			{
+				try
+				{
+					var canEnqueue = client.TryEnqueue(json, true, notification.Method);
+					if (!canEnqueue)
+					{
+						_logger.LogDebug("Client {ClientId} queue full, dropping notification {Method}", client.Id, notification.Method);
+					}
+				}
+				catch (Exception ex)
+				{
+					_logger.LogError(ex, "Error queuing notification for client {ClientId}", client.Id);
+				}
+			}
+		}
 
-                    totalReceived += result.Count;
-                    if (totalReceived > IpcConfig.WebSocketMaxMessageBytes)
-                    {
-                        _logger.LogWarning("Client {ClientId} exceeded max message size, disconnecting", client.Id);
-                        break;
-                    }
+		// Private methods
+		private async Task AcceptConnectionsAsync()
+		{
+			while (!_cancellation.Token.IsCancellationRequested)
+			{
+				try
+				{
+					var context = await _httpListener.GetContextAsync();
+					if (context.Request.IsWebSocketRequest)
+					{
+						_ = Task.Run(() => HandleWebSocketConnection(context), _cancellation.Token);
+					}
+					else
+					{
+						context.Response.StatusCode = 400;
+						context.Response.Close();
+					}
+				}
+				catch (HttpListenerException) when (_cancellation.Token.IsCancellationRequested)
+				{
+					break;
+				}
+				catch (Exception ex)
+				{
+					_logger.LogError(ex, "Error accepting WebSocket connection");
+				}
+			}
+		}
 
-                    var text = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                    messageBuilder.Append(text);
+		private async Task HandleWebSocketConnection(HttpListenerContext httpContext)
+		{
+			WebSocketContext? webSocketContext = null;
+			ClientContext? client = null;
 
-                    if (result.EndOfMessage)
-                    {
-                        var messageText = messageBuilder.ToString();
-                        messageBuilder.Clear();
-                        totalReceived = 0;
+			try
+			{
+				webSocketContext = await httpContext.AcceptWebSocketAsync(null);
+				var webSocket = webSocketContext.WebSocket;
 
-                        client.LastSeenUtc = DateTime.UtcNow;
-                        await ProcessIncomingMessage(client, messageText);
-                    }
-                }
-            }
-            catch (OperationCanceledException) { }
-            catch (WebSocketException ex)
-            {
-                _logger.LogDebug("WebSocket error for client {ClientId}: {Error}", client.Id, ex.Message);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error in receive loop for client {ClientId}", client.Id);
-            }
-        }
+				client = new ClientContext
+				{
+					WebSocket = webSocket,
+					Cancellation = CancellationTokenSource.CreateLinkedTokenSource(_cancellation.Token)
+				};
 
-        private async Task ProcessIncomingMessage(ClientContext client, string messageText)
-        {
-            var message = JsonRpcMessage.FromJson(messageText);
-            if (!JsonRpcMessage.ValidJsonRpc(message) || JsonRpcMessage.IsInvalidRequest(message!))
-            {
-                if (!message?.IsNotification == true)
-                {
-                    var errorResponse = JsonRpcMessage.MakeError(message?.Id, -32600, "Invalid Request");
-                    await SendResponseAsync(client, errorResponse);
-                }
-                return;
-            }
+				_clients[client.Id] = client;
+				_logger.LogDebug("WebSocket client {ClientId} connected", client.Id);
 
-            // Handle handshake specially
-            if (message!.Method == "handshake")
-            {
-                await HandleHandshake(client, message);
-                return;
-            }
+				// Start send loop
+				_ = Task.Run(() => ClientSendLoopAsync(client), client.Cancellation.Token);
 
-            // Check method registry
-            if (!_methodRegistry.TryGet(message.Method ?? "", out var methodDef))
-            {
-                if (!message.IsNotification)
-                {
-                    var errorResponse = JsonRpcMessage.MakeError(message.Id, -32601, "Method not found");
-                    await SendResponseAsync(client, errorResponse);
-                }
-                return;
-            }
+				// Handle receive loop
+				await ClientReceiveLoopAsync(client);
+			}
+			catch (Exception ex)
+			{
+				_logger.LogError(ex, "Error in WebSocket connection handler");
+			}
+			finally
+			{
+				if (client != null)
+				{
+					_clients.TryRemove(client.Id, out _);
+					client.Dispose();
+					_logger.LogDebug("WebSocket client {ClientId} disconnected", client.Id);
+				}
+			}
+		}
 
-            // Enforce authentication
-            if (methodDef.RequiresAuth && !client.IsAuthenticated)
-            {
-                if (!message.IsNotification)
-                {
-                    var errorResponse = JsonRpcMessage.MakeError(message.Id, -32001, "Authentication required");
-                    await SendResponseAsync(client, errorResponse);
-                }
-                return;
-            }
+		private async Task ClientReceiveLoopAsync(ClientContext client)
+		{
+			var buffer = new byte[IpcConfig.WebSocketMaxMessageBytes];
+			var webSocket = client.WebSocket!;
 
-            // Rate limiting
-            if (!client.TryConsumeToken())
-            {
-                if (!message.IsNotification)
-                {
-                    var errorResponse = JsonRpcMessage.MakeError(message.Id, -32003, "Rate limit exceeded");
-                    await SendResponseAsync(client, errorResponse);
-                }
-                return;
-            }
+			while (webSocket.State == WebSocketState.Open && !client.Cancellation!.Token.IsCancellationRequested)
+			{
+				try
+				{
+					var messageBuilder = new StringBuilder();
+					WebSocketReceiveResult result;
 
-            // Check if notifications are allowed for this method
-            if (message.IsNotification && !methodDef.AllowNotifications)
-            {
-                _logger.LogWarning("Client {ClientId} sent notification for method {Method} which doesn't allow notifications", 
-                    client.Id, message.Method);
-                return;
-            }
+					do
+					{
+						result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), client.Cancellation.Token);
 
-            // Dispatch to handlers
-            OnRequestReceived?.Invoke(client, message);
-        }
+						if (result.MessageType == WebSocketMessageType.Text)
+						{
+							var text = Encoding.UTF8.GetString(buffer, 0, result.Count);
+							messageBuilder.Append(text);
+						}
+						else if (result.MessageType == WebSocketMessageType.Close)
+						{
+							return;
+						}
 
-        private async Task HandleHandshake(ClientContext client, JsonRpcMessage message)
-        {
-            try
-            {
-                if (message.Params?.TryGetProperty("token", out var tokenProp) != true)
-                {
-                    var errorResponse = JsonRpcMessage.MakeError(message.Id, -32602, "Missing token parameter");
-                    await SendResponseAsync(client, errorResponse);
-                    return;
-                }
+					} while (!result.EndOfMessage);
 
-                var providedToken = tokenProp.GetString();
-                if (providedToken != _currentToken)
-                {
-                    var errorResponse = JsonRpcMessage.MakeError(message.Id, -32002, "Invalid token");
-                    await SendResponseAsync(client, errorResponse);
-                    return;
-                }
+					var messageText = messageBuilder.ToString();
+					if (string.IsNullOrEmpty(messageText))
+						continue;
 
-                client.IsAuthenticated = true;
-                client.AuthEpoch = _currentEpoch;
-                
-                if (message.Params?.TryGetProperty("clientInfo", out var clientInfoProp) == true)
-                {
-                    client.ClientInfo = clientInfoProp.GetString();
-                }
+					client.LastSeenUtc = DateTime.UtcNow;
+					await ProcessIncomingMessageAsync(client, messageText);
+				}
+				catch (OperationCanceledException) when (client.Cancellation.Token.IsCancellationRequested)
+				{
+					break;
+				}
+				catch (WebSocketException ex) when (ex.WebSocketErrorCode == WebSocketError.ConnectionClosedPrematurely)
+				{
+					break;
+				}
+				catch (Exception ex)
+				{
+					_logger.LogError(ex, "Error in client receive loop for {ClientId}", client.Id);
+					break;
+				}
+			}
+		}
 
-                if (!message.IsNotification)
-                {
-                    var successResponse = JsonRpcMessage.MakeResult(message.Id, new { 
-                        status = "authenticated", 
-                        epoch = _currentEpoch,
-                        serverInfo = "Files IPC Server"
-                    });
-                    await SendResponseAsync(client, successResponse);
-                }
+		private async Task ClientSendLoopAsync(ClientContext client)
+		{
+			var webSocket = client.WebSocket!;
 
-                _logger.LogInformation("Client {ClientId} authenticated successfully", client.Id);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error during handshake with client {ClientId}", client.Id);
-            }
-        }
+			while (webSocket.State == WebSocketState.Open && !client.Cancellation!.Token.IsCancellationRequested)
+			{
+				try
+				{
+					if (client.SendQueue.TryDequeue(out var item))
+					{
+						var bytes = Encoding.UTF8.GetBytes(item.payload);
+						await webSocket.SendAsync(
+							new ArraySegment<byte>(bytes),
+							WebSocketMessageType.Text,
+							true,
+							client.Cancellation.Token);
 
-        private async Task ClientSendLoopAsync(ClientContext client)
-        {
-            try
-            {
-                while (client.WebSocket?.State == WebSocketState.Open && !client.Cancellation!.Token.IsCancellationRequested)
-                {
-                    if (client.SendQueue.TryDequeue(out var item))
-                    {
-                        var bytes = Encoding.UTF8.GetBytes(item.payload);
-                        await client.WebSocket.SendAsync(
-                            new ArraySegment<byte>(bytes),
-                            WebSocketMessageType.Text,
-                            true,
-                            client.Cancellation.Token);
-                            
-                        client.DecreaseQueuedBytes(bytes.Length);
-                    }
-                    else
-                    {
-                        await Task.Delay(10, client.Cancellation.Token);
-                    }
-                }
-            }
-            catch (OperationCanceledException) { }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error in send loop for client {ClientId}", client.Id);
-            }
-        }
+						client.DecreaseQueuedBytes(bytes.Length);
+					}
+					else
+					{
+						// No messages to send, wait a bit
+						await Task.Delay(10, client.Cancellation.Token);
+					}
+				}
+				catch (OperationCanceledException) when (client.Cancellation.Token.IsCancellationRequested)
+				{
+					break;
+				}
+				catch (WebSocketException ex) when (ex.WebSocketErrorCode == WebSocketError.ConnectionClosedPrematurely)
+				{
+					break;
+				}
+				catch (Exception ex)
+				{
+					_logger.LogError(ex, "Error in client send loop for {ClientId}", client.Id);
+					break;
+				}
+			}
+		}
 
-        public async Task SendResponseAsync(ClientContext client, JsonRpcMessage response)
-        {
-            if (response.IsNotification)
-            {
-                _logger.LogWarning("Attempted to send notification as response");
-                return;
-            }
+		private async Task ProcessIncomingMessageAsync(ClientContext client, string messageText)
+		{
+			try
+			{
+				// Rate limiting check
+				if (!client.TryConsumeToken())
+				{
+					var error = JsonRpcMessage.MakeError(null, -32003, "Rate limit exceeded");
+					await SendResponseAsync(client, error);
+					return;
+				}
 
-            try
-            {
-                var json = response.ToJson();
-                client.TryEnqueue(json, false);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error sending response to client {ClientId}", client.Id);
-            }
-        }
+				var message = JsonRpcMessage.FromJson(messageText);
+				if (!JsonRpcMessage.ValidJsonRpc(message) || JsonRpcMessage.IsInvalidRequest(message))
+				{
+					var error = JsonRpcMessage.MakeError(message?.Id, -32600, "Invalid Request");
+					await SendResponseAsync(client, error);
+					return;
+				}
 
-        public async Task BroadcastAsync(JsonRpcMessage notification)
-        {
-            if (!notification.IsNotification)
-            {
-                _logger.LogWarning("Attempted to broadcast non-notification message");
-                return;
-            }
+				// Check method registry
+				if (!string.IsNullOrEmpty(message.Method) && _methodRegistry.TryGet(message.Method, out var methodDef))
+				{
+					// Auth check
+					if (methodDef.RequiresAuth && !client.IsAuthenticated)
+					{
+						var error = JsonRpcMessage.MakeError(message.Id, -32001, "Authentication required");
+						await SendResponseAsync(client, error);
+						return;
+					}
 
-            var json = notification.ToJson();
-            var method = notification.Method;
+					// Additional auth policy check
+					if (methodDef.AuthorizationPolicy != null && !methodDef.AuthorizationPolicy(client, message))
+					{
+						var error = JsonRpcMessage.MakeError(message.Id, -32002, "Authorization failed");
+						await SendResponseAsync(client, error);
+						return;
+					}
+				}
 
-            foreach (var client in _clients.Values)
-            {
-                if (client.IsAuthenticated && client.TryConsumeToken())
-                {
-                    client.TryEnqueue(json, true, method);
-                }
-            }
-        }
+				// Handle token validation for handshake
+				if (message.Method == "handshake")
+				{
+					await HandleHandshakeAsync(client, message);
+					return;
+				}
 
-        private void SendKeepalive(object? state)
-        {
-            if (!_isStarted || _cancellation.Token.IsCancellationRequested)
-                return;
+				// Delegate to handler
+				if (OnRequestReceived != null)
+				{
+					await OnRequestReceived(client, message);
+				}
+			}
+			catch (JsonException)
+			{
+				var error = JsonRpcMessage.MakeError(null, -32700, "Parse error");
+				await SendResponseAsync(client, error);
+			}
+			catch (Exception ex)
+			{
+				_logger.LogError(ex, "Error processing message from client {ClientId}", client.Id);
+				var error = JsonRpcMessage.MakeError(null, -32603, "Internal error");
+				await SendResponseAsync(client, error);
+			}
+		}
 
-            var pingNotification = new JsonRpcMessage
-            {
-                Method = "ping",
-                Params = JsonSerializer.SerializeToElement(new { timestamp = DateTime.UtcNow })
-            };
+		private async Task HandleHandshakeAsync(ClientContext client, JsonRpcMessage request)
+		{
+			try
+			{
+				if (request.Params?.TryGetProperty("token", out var tokenElement) == true)
+				{
+					var providedToken = tokenElement.GetString();
+					if (string.Equals(providedToken, _currentToken, StringComparison.Ordinal))
+					{
+						client.IsAuthenticated = true;
+						client.AuthEpoch = _currentEpoch;
 
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await BroadcastAsync(pingNotification);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error sending keepalive ping");
-                }
-            });
-        }
+						var result = JsonRpcMessage.MakeResult(request.Id, new
+						{
+							authenticated = true,
+							epoch = _currentEpoch,
+							serverVersion = "1.0"
+						});
 
-        private void CleanupInactiveClients(object? state)
-        {
-            if (!_isStarted || _cancellation.Token.IsCancellationRequested)
-                return;
+						await SendResponseAsync(client, result);
+						_logger.LogInformation("Client {ClientId} authenticated successfully", client.Id);
+					}
+					else
+					{
+						var error = JsonRpcMessage.MakeError(request.Id, -32002, "Invalid token");
+						await SendResponseAsync(client, error);
+					}
+				}
+				else
+				{
+					var error = JsonRpcMessage.MakeError(request.Id, -32602, "Invalid params - token required");
+					await SendResponseAsync(client, error);
+				}
+			}
+			catch (Exception ex)
+			{
+				_logger.LogError(ex, "Error handling handshake for client {ClientId}", client.Id);
+				var error = JsonRpcMessage.MakeError(request.Id, -32603, "Internal error");
+				await SendResponseAsync(client, error);
+			}
+		}
 
-            var cutoff = DateTime.UtcNow.AddMinutes(-5);
-            var toRemove = new List<ClientContext>();
+		private void SendKeepalive(object? state)
+		{
+			if (!_isStarted || _cancellation.Token.IsCancellationRequested)
+				return;
 
-            foreach (var client in _clients.Values)
-            {
-                if (client.LastSeenUtc < cutoff || client.WebSocket?.State != WebSocketState.Open)
-                {
-                    toRemove.Add(client);
-                }
-            }
+			var pingNotification = new JsonRpcMessage
+			{
+				Method = "ping",
+				Params = JsonSerializer.SerializeToElement(new { timestamp = DateTime.UtcNow })
+			};
 
-            foreach (var client in toRemove)
-            {
-                _clients.TryRemove(client.Id, out _);
-                client.Dispose();
-                _logger.LogDebug("Cleaned up inactive client {ClientId}", client.Id);
-            }
-        }
+			_ = Task.Run(async () =>
+			{
+				try
+				{
+					await BroadcastAsync(pingNotification);
+				}
+				catch (Exception ex)
+				{
+					_logger.LogError(ex, "Error sending keepalive ping");
+				}
+			});
+		}
 
-        public void Dispose()
-        {
-            _cancellation.Cancel();
-            _keepaliveTimer?.Dispose();
-            _cleanupTimer?.Dispose();
-            _httpListener?.Stop();
-            _httpListener?.Close();
-            _cancellation.Dispose();
+		private void CleanupInactiveClients(object? state)
+		{
+			if (!_isStarted || _cancellation.Token.IsCancellationRequested)
+				return;
 
-            foreach (var client in _clients.Values)
-            {
-                client.Dispose();
-            }
-        }
-    }
+			var cutoff = DateTime.UtcNow.AddMinutes(-5d);
+			var toRemove = new List<ClientContext>();
+
+			foreach (var client in _clients.Values)
+			{
+				if (client.LastSeenUtc < cutoff || client.WebSocket?.State != WebSocketState.Open)
+				{
+					toRemove.Add(client);
+				}
+			}
+
+			foreach (var client in toRemove)
+			{
+				_clients.TryRemove(client.Id, out _);
+				client.Dispose();
+				_logger.LogDebug("Cleaned up inactive client {ClientId}", client.Id);
+			}
+		}
+
+		// Dispose
+		public void Dispose()
+		{
+			if (_disposed)
+				return;
+
+			_cancellation.Cancel();
+			_keepaliveTimer?.Dispose();
+			_cleanupTimer?.Dispose();
+			_httpListener?.Stop();
+			_httpListener?.Close();
+			_cancellation.Dispose();
+
+			foreach (var client in _clients.Values)
+			{
+				client.Dispose();
+			}
+
+			_disposed = true;
+		}
+	}
 }
