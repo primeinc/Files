@@ -17,6 +17,7 @@ using Windows.ApplicationModel;
 using Windows.Storage;
 using Windows.System;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
+using Files.App.Communication; // Added for IPC service registrations
 
 namespace Files.App.Helpers
 {
@@ -217,6 +218,7 @@ namespace Files.App.Helpers
 					.AddSingleton<ITagsContext, TagsContext>()
 					.AddSingleton<ISidebarContext, SidebarContext>()
 					// Services
+					.AddSingleton(Ioc.Default)
 					.AddSingleton<IWindowsRecentItemsService, WindowsRecentItemsService>()
 					.AddSingleton<IWindowsIniService, WindowsIniService>()
 					.AddSingleton<IWindowsWallpaperService, WindowsWallpaperService>()
@@ -249,6 +251,10 @@ namespace Files.App.Helpers
 					.AddSingleton<IStorageArchiveService, StorageArchiveService>()
 					.AddSingleton<IStorageSecurityService, StorageSecurityService>()
 					.AddSingleton<IWindowsCompatibilityService, WindowsCompatibilityService>()
+					// IPC system
+					.AddSingleton<RpcMethodRegistry>()
+					.AddSingleton<ActionRegistry>()
+					.AddSingleton<IAppCommunicationService, NamedPipeAppCommunicationService>()
 					// ViewModels
 					.AddSingleton<MainPageViewModel>()
 					.AddSingleton<InfoPaneViewModel>()

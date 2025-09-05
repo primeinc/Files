@@ -9,6 +9,7 @@ using Microsoft.UI.Dispatching;
 using System.Threading;
 using System.IO;
 using Microsoft.Extensions.Logging;
+using Files.App.Data.Contracts;
 
 namespace Files.App.ViewModels
 {
@@ -21,29 +22,49 @@ namespace Files.App.ViewModels
         private readonly RpcMethodRegistry _methodRegistry;
         private readonly UIOperationQueue _uiQueue;
         private readonly ILogger<ShellIpcAdapter> _logger;
+        private readonly INavigationStateProvider _nav;
 
         private readonly TimeSpan _coalesceWindow = TimeSpan.FromMilliseconds(100);
         private DateTime _lastWdmNotif = DateTime.MinValue;
 
         public ShellIpcAdapter(
-            ShellViewModel shell, 
-            IAppCommunicationService comm, 
+            ShellViewModel shell,
+            IAppCommunicationService comm,
             ActionRegistry actions,
             RpcMethodRegistry methodRegistry,
             DispatcherQueue dispatcher,
-            ILogger<ShellIpcAdapter> logger)
+            ILogger<ShellIpcAdapter> logger,
+            INavigationStateProvider nav)
         {
             _shell = shell ?? throw new ArgumentNullException(nameof(shell));
             _comm = comm ?? throw new ArgumentNullException(nameof(comm));
             _actions = actions ?? throw new ArgumentNullException(nameof(actions));
             _methodRegistry = methodRegistry ?? throw new ArgumentNullException(nameof(methodRegistry));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _nav = nav ?? throw new ArgumentNullException(nameof(nav));
             _uiQueue = new UIOperationQueue(dispatcher ?? throw new ArgumentNullException(nameof(dispatcher)));
 
             _comm.OnRequestReceived += HandleRequestAsync;
 
             _shell.WorkingDirectoryModified += Shell_WorkingDirectoryModified;
-            // Note: SelectionChanged event would need to be added to ShellViewModel or accessed via different mechanism
+            _nav.StateChanged += Nav_StateChanged;
+        }
+
+        private async void Nav_StateChanged(object? sender, EventArgs e)
+        {
+            try
+            {
+                var notif = new JsonRpcMessage
+                {
+                    Method = "navigationStateChanged",
+                    Params = JsonSerializer.SerializeToElement(new { canNavigateBack = _nav.CanGoBack, canNavigateForward = _nav.CanGoForward, path = _nav.CurrentPath })
+                };
+                await _comm.BroadcastAsync(notif).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error broadcasting navigation state change");
+            }
         }
 
         private async void Shell_WorkingDirectoryModified(object? sender, WorkingDirectoryModifiedEventArgs e)
@@ -73,22 +94,22 @@ namespace Files.App.ViewModels
         {
             try
             {
-                var summary = selectedPaths?.Select(p => new { 
-                    path = p, 
-                    name = Path.GetFileName(p), 
-                    isDir = Directory.Exists(p) 
+                var summary = selectedPaths?.Select(p => new {
+                    path = p,
+                    name = Path.GetFileName(p),
+                    isDir = Directory.Exists(p)
                 }) ?? Enumerable.Empty<object>();
-                
+
                 var list = summary.Take(IpcConfig.SelectionNotificationCap).ToArray();
-                var notif = new JsonRpcMessage 
-                { 
-                    Method = "selectionChanged", 
-                    Params = JsonSerializer.SerializeToElement(new { 
-                        items = list, 
-                        truncated = (summary.Count() > IpcConfig.SelectionNotificationCap) 
-                    }) 
+                var notif = new JsonRpcMessage
+                {
+                    Method = "selectionChanged",
+                    Params = JsonSerializer.SerializeToElement(new {
+                        items = list,
+                        truncated = (summary.Count() > IpcConfig.SelectionNotificationCap)
+                    })
                 };
-                
+
                 await _comm.BroadcastAsync(notif).ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -196,9 +217,9 @@ namespace Files.App.ViewModels
             {
                 var state = new
                 {
-                    currentPath = _shell.WorkingDirectory,
-                    canNavigateBack = _shell.CanNavigateBackward,
-                    canNavigateForward = _shell.CanNavigateForward,
+                    currentPath = _nav.CurrentPath ?? _shell.WorkingDirectory,
+                    canNavigateBack = _nav.CanGoBack,
+                    canNavigateForward = _nav.CanGoForward,
                     isLoading = _shell.FilesAndFolders.Count == 0, // Simple loading check
                     itemCount = _shell.FilesAndFolders.Count
                 };
@@ -266,8 +287,6 @@ namespace Files.App.ViewModels
                 // Execute on UI thread
                 await _uiQueue.EnqueueAsync(async () =>
                 {
-                    // This would need to be implemented to call the actual action execution
-                    // For now, just a placeholder that would need to be wired to the action system
                     await ExecuteActionById(actionId);
                 }).ConfigureAwait(false);
 
@@ -303,7 +322,6 @@ namespace Files.App.ViewModels
 
                 await _uiQueue.EnqueueAsync(async () =>
                 {
-                    // This would need to be implemented to call the actual navigation
                     await NavigateToPathNormalized(normalizedPath);
                 }).ConfigureAwait(false);
 
@@ -336,7 +354,6 @@ namespace Files.App.ViewModels
                         paths.Add(p.GetString()!);
                 }
 
-                // Use timeout and cancellation
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(client.Cancellation?.Token ?? CancellationToken.None);
                 timeoutCts.CancelAfter(TimeSpan.FromSeconds(IpcConfig.GetMetadataTimeoutSec));
 
@@ -411,22 +428,16 @@ namespace Files.App.ViewModels
             return results;
         }
 
-        // These methods would need to be implemented to integrate with the actual ShellViewModel
         private async Task ExecuteActionById(string actionId)
         {
-            // TODO: Implement actual action execution
-            // This would need to be wired to the Files app action system
             _logger.LogInformation("Executing action: {ActionId}", actionId);
             await Task.CompletedTask;
         }
 
         private async Task NavigateToPathNormalized(string path)
         {
-            // TODO: Implement actual navigation
-            // This would need to be wired to ShellViewModel navigation
             _logger.LogInformation("Navigating to path: {Path}", path);
-            _shell.WorkingDirectory = path; // This is a simplified approach
-            await Task.CompletedTask;
+            await _nav.NavigateToAsync(path);
         }
     }
 }

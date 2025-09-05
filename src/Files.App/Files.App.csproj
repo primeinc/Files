@@ -36,7 +36,7 @@
     <PropertyGroup>
         <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     </PropertyGroup>
-  
+
     <ItemGroup>
         <Manifest Include="app.manifest" />
         <Content Update="Assets\Resources\**">
@@ -135,6 +135,12 @@
 
 	<ItemGroup>
 		<AdditionalFiles Include="Strings\en-US\Resources.resw" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <Page Update="Views\Settings\IpcPage.xaml">
+	    <Generator>MSBuild:Compile</Generator>
+	  </Page>
 	</ItemGroup>
 
   <Import Project="..\Satori.targets" Condition=" '$(Platform)' != 'x86' " />
