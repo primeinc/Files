@@ -161,6 +161,8 @@ namespace Files.App
 			public const int GetMetadataMaxItems = 500;
 			
 			public const int GetMetadataTimeoutSec = 30;
+
+			public const int WebSocketPort = 52345;
 		}
 
 		public static class LocalSettings

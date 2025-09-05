@@ -10,9 +10,9 @@ namespace Files.App.Communication.Models
 
 		public long SizeBytes { get; set; }
 
-		public string DateModified { get; set; } = string.Empty;
+		public DateTimeOffset DateModified { get; set; }
 
-		public string DateCreated { get; set; } = string.Empty;
+		public DateTimeOffset DateCreated { get; set; }
 
 		public string? MimeType { get; set; }
 

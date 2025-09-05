@@ -20,7 +20,7 @@ namespace Files.App.Communication
 		};
 
 		// Public methods
-		public bool CanExecute(string actionId, object? context = null)
+		public bool CanExecute(string actionId)
 		{
 			if (string.IsNullOrEmpty(actionId))
 				return false;
@@ -28,7 +28,7 @@ namespace Files.App.Communication
 			return _allowedActions.Contains(actionId);
 		}
 
-		public IEnumerable<string> GetAllowedActions() => _allowedActions.ToList();
+		public IEnumerable<string> GetAllowedActions() => _allowedActions;
 
 		public void RegisterAction(string actionId)
 		{

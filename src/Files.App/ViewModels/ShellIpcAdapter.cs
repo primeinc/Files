@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Files.App.Communication;
 using Files.App.Communication.Models;
+using Files.App.Data.Contexts;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Dispatching;
 
@@ -22,6 +23,7 @@ namespace Files.App.ViewModels
 		private readonly RpcMethodRegistry _methodRegistry;
 		private readonly UIOperationQueue _uiQueue;
 		private readonly ILogger<ShellIpcAdapter> _logger;
+		private readonly IContentPageContext _contentPageContext;
 		private readonly TimeSpan _coalesceWindow = TimeSpan.FromMilliseconds(100d);
 
 		// Fields
@@ -33,6 +35,7 @@ namespace Files.App.ViewModels
 			IAppCommunicationService comm,
 			ActionRegistry actions,
 			RpcMethodRegistry methodRegistry,
+			IContentPageContext contentPageContext,
 			DispatcherQueue dispatcher,
 			ILogger<ShellIpcAdapter> logger)
 		{
@@ -40,6 +43,7 @@ namespace Files.App.ViewModels
 			_comm = comm ?? throw new ArgumentNullException(nameof(comm));
 			_actions = actions ?? throw new ArgumentNullException(nameof(actions));
 			_methodRegistry = methodRegistry ?? throw new ArgumentNullException(nameof(methodRegistry));
+			_contentPageContext = contentPageContext ?? throw new ArgumentNullException(nameof(contentPageContext));
 			_logger = logger ?? throw new ArgumentNullException(nameof(logger));
 			_uiQueue = new UIOperationQueue(dispatcher ?? throw new ArgumentNullException(nameof(dispatcher)));
 
@@ -251,9 +255,17 @@ namespace Files.App.ViewModels
 			{
 				await _uiQueue.EnqueueAsync(async () =>
 				{
-					// This would need to be implemented based on the actual ShellViewModel navigation methods
-					// await _shell.NavigateToPathAsync(normalizedPath);
-					_logger.LogInformation("Navigation to {Path} requested (not yet implemented)", normalizedPath);
+					// Perform navigation using the ShellPage
+					var shellPage = _contentPageContext.ShellPage;
+					if (shellPage != null)
+					{
+						shellPage.NavigateToPath(normalizedPath);
+						_logger.LogInformation("Navigation to {Path} requested and performed", normalizedPath);
+					}
+					else
+					{
+						_logger.LogWarning("Cannot navigate - no active shell page available");
+					}
 				});
 
 				var result = JsonRpcMessage.MakeResult(request.Id, new
@@ -307,9 +319,42 @@ namespace Files.App.ViewModels
 
 				await _uiQueue.EnqueueAsync(async () =>
 				{
-					// This would need to be implemented based on the actual action execution system
-					// await _shell.ExecuteActionAsync(actionId, context);
-					_logger.LogInformation("Action {ActionId} execution requested (not yet implemented)", actionId);
+					// Execute the action based on actionId
+					// TODO: This should integrate with the proper Files action system once available
+					switch (actionId.ToLowerInvariant())
+					{
+						case "navigate":
+							// Already handled via navigate method
+							_logger.LogInformation("Navigate action executed via dedicated method");
+							break;
+						case "refresh":
+							await _contentPageContext.ShellPage?.Refresh_Click();
+							_logger.LogInformation("Refresh action executed");
+							break;
+						case "copypath":
+							// TODO: Implement copy path action
+							_logger.LogInformation("Copy path action requested (not yet implemented)");
+							break;
+						case "openinnewtab":
+							// TODO: Implement open in new tab action  
+							_logger.LogInformation("Open in new tab action requested (not yet implemented)");
+							break;
+						case "openinnewwindow":
+							// TODO: Implement open in new window action
+							_logger.LogInformation("Open in new window action requested (not yet implemented)");
+							break;
+						case "toggledualpane":
+							// TODO: Implement toggle dual pane action
+							_logger.LogInformation("Toggle dual pane action requested (not yet implemented)");
+							break;
+						case "showproperties":
+							// TODO: Implement show properties action
+							_logger.LogInformation("Show properties action requested (not yet implemented)");
+							break;
+						default:
+							_logger.LogWarning("Unknown action {ActionId}", actionId);
+							break;
+					}
 				});
 
 				var result = JsonRpcMessage.MakeResult(request.Id, new
@@ -353,24 +398,44 @@ namespace Files.App.ViewModels
 
 			try
 			{
-				// Security checks: reject device paths, UNC admin shares, etc.
-				var upper = path.ToUpperInvariant();
+				// Robust path traversal prevention using Path.GetFullPath
+				var fullPath = Path.GetFullPath(path);
+				
+				// Define base directories that are considered safe (system drives)
+				var allowedRoots = new[] { @"C:\", @"D:\", @"E:\", @"F:\" }; // Add more as needed
+				bool isUnderAllowedRoot = allowedRoots.Any(root => 
+					fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase));
+				
+				if (!isUnderAllowedRoot)
+				{
+					// For UNC paths, be more restrictive
+					if (fullPath.StartsWith(@"\\", StringComparison.Ordinal))
+					{
+						// Reject admin shares and device paths
+						var upper = fullPath.ToUpperInvariant();
+						if (upper.StartsWith(@"\\.\", StringComparison.Ordinal) ||
+						    upper.StartsWith(@"\\?\", StringComparison.Ordinal) ||
+						    upper.Contains(@"\C$", StringComparison.Ordinal) ||
+						    upper.Contains(@"\ADMIN$", StringComparison.Ordinal))
+							return false;
+					}
+					else
+					{
+						// Non-UNC paths must be under allowed roots
+						return false;
+					}
+				}
+
+				// Additional security checks
+				var upper = fullPath.ToUpperInvariant();
 
 				// Reject device paths
 				if (upper.StartsWith(@"\\.\", StringComparison.Ordinal) ||
 				    upper.StartsWith(@"\\?\", StringComparison.Ordinal))
 					return false;
 
-				// Reject admin shares
-				if (upper.StartsWith(@"\\", StringComparison.Ordinal) && upper.Contains(@"\C$", StringComparison.Ordinal))
-					return false;
-
-				// Check for path traversal attempts
-				if (path.Contains("..") || path.Contains("~"))
-					return false;
-
 				// Must be rooted (absolute path)
-				return Path.IsPathRooted(path);
+				return Path.IsPathRooted(fullPath);
 			}
 			catch
 			{
@@ -423,8 +488,8 @@ namespace Files.App.ViewModels
 						Name = info.Name,
 						IsDirectory = isDirectory,
 						Exists = true,
-						DateCreated = info.CreationTime.ToString("yyyy-MM-ddTHH:mm:ssZ"),
-						DateModified = info.LastWriteTime.ToString("yyyy-MM-ddTHH:mm:ssZ")
+						DateCreated = info.CreationTime,
+						DateModified = info.LastWriteTime
 					};
 
 					if (!isDirectory)

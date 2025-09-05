@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -68,13 +69,13 @@ namespace Files.App.Communication
 				_currentEpoch = ProtectedTokenStore.GetEpoch();
 
 				_httpListener.Prefixes.Clear();
-				_httpListener.Prefixes.Add("http://127.0.0.1:52345/");
+				_httpListener.Prefixes.Add($"http://127.0.0.1:{IpcConfig.WebSocketPort}/");
 				_httpListener.Start();
 				_isStarted = true;
 
 				_ = Task.Run(AcceptConnectionsAsync, _cancellation.Token);
 
-				_logger.LogInformation("WebSocket IPC service started on http://127.0.0.1:52345/");
+				_logger.LogInformation("WebSocket IPC service started on http://127.0.0.1:{Port}/", IpcConfig.WebSocketPort);
 			}
 			catch (Exception ex)
 			{
@@ -225,50 +226,57 @@ namespace Files.App.Communication
 
 		private async Task ClientReceiveLoopAsync(ClientContext client)
 		{
-			var buffer = new byte[IpcConfig.WebSocketMaxMessageBytes];
-			var webSocket = client.WebSocket!;
-
-			while (webSocket.State == WebSocketState.Open && !client.Cancellation!.Token.IsCancellationRequested)
+			var buffer = ArrayPool<byte>.Shared.Rent((int)IpcConfig.WebSocketMaxMessageBytes);
+			try
 			{
-				try
-				{
-					var messageBuilder = new StringBuilder();
-					WebSocketReceiveResult result;
+				var webSocket = client.WebSocket!;
 
-					do
+				while (webSocket.State == WebSocketState.Open && !client.Cancellation!.Token.IsCancellationRequested)
+				{
+					try
 					{
-						result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), client.Cancellation.Token);
+						var messageBuilder = new StringBuilder();
+						WebSocketReceiveResult result;
 
-						if (result.MessageType == WebSocketMessageType.Text)
+						do
 						{
-							var text = Encoding.UTF8.GetString(buffer, 0, result.Count);
-							messageBuilder.Append(text);
-						}
-						else if (result.MessageType == WebSocketMessageType.Close)
-							return;
+							result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), client.Cancellation.Token);
 
-					} while (!result.EndOfMessage);
+							if (result.MessageType == WebSocketMessageType.Text)
+							{
+								var text = Encoding.UTF8.GetString(buffer, 0, result.Count);
+								messageBuilder.Append(text);
+							}
+							else if (result.MessageType == WebSocketMessageType.Close)
+								return;
 
-					var messageText = messageBuilder.ToString();
-					if (string.IsNullOrEmpty(messageText))
-						continue;
+						} while (!result.EndOfMessage);
 
-					client.LastSeenUtc = DateTime.UtcNow;
-					await ProcessIncomingMessageAsync(client, messageText);
+						var messageText = messageBuilder.ToString();
+						if (string.IsNullOrEmpty(messageText))
+							continue;
+
+						client.LastSeenUtc = DateTime.UtcNow;
+						await ProcessIncomingMessageAsync(client, messageText);
+					}
+					catch (OperationCanceledException) when (client.Cancellation.Token.IsCancellationRequested)
+					{
+						break;
+					}
+					catch (WebSocketException ex) when (ex.WebSocketErrorCode == WebSocketError.ConnectionClosedPrematurely)
+					{
+						break;
+					}
+					catch (Exception ex)
+					{
+						_logger.LogError(ex, "Error in client receive loop for {ClientId}", client.Id);
+						break;
+					}
 				}
-				catch (OperationCanceledException) when (client.Cancellation.Token.IsCancellationRequested)
-				{
-					break;
-				}
-				catch (WebSocketException ex) when (ex.WebSocketErrorCode == WebSocketError.ConnectionClosedPrematurely)
-				{
-					break;
-				}
-				catch (Exception ex)
-				{
-					_logger.LogError(ex, "Error in client receive loop for {ClientId}", client.Id);
-					break;
-				}
+			}
+			finally
+			{
+				ArrayPool<byte>.Shared.Return(buffer);
 			}
 		}
 

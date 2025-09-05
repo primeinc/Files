@@ -18,5 +18,7 @@ namespace Files.App.Communication
 		public static int GetMetadataMaxItems { get; set; } = Constants.IpcSettings.GetMetadataMaxItems;
 
 		public static int GetMetadataTimeoutSec { get; set; } = Constants.IpcSettings.GetMetadataTimeoutSec;
+
+		public static int WebSocketPort { get; set; } = Constants.IpcSettings.WebSocketPort;
 	}
 }
