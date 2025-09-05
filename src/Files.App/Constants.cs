@@ -144,6 +144,25 @@ namespace Files.App
 			}
 		}
 
+		public static class IpcSettings
+		{
+			public const long WebSocketMaxMessageBytes = 16L * 1024L * 1024L; // 16 MB
+			
+			public const long NamedPipeMaxMessageBytes = 10L * 1024L * 1024L; // 10 MB
+			
+			public const long PerClientQueueCapBytes = 2L * 1024L * 1024L; // 2 MB
+			
+			public const int RateLimitPerSecond = 20;
+			
+			public const int RateLimitBurst = 60;
+			
+			public const int SelectionNotificationCap = 200;
+			
+			public const int GetMetadataMaxItems = 500;
+			
+			public const int GetMetadataTimeoutSec = 30;
+		}
+
 		public static class LocalSettings
 		{
 			public const string DateTimeFormat = "datetimeformat";

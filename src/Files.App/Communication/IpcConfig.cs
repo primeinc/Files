@@ -1,15 +1,22 @@
 namespace Files.App.Communication
 {
-    // Centralized runtime caps and config values (tune from Settings UI).
-    public static class IpcConfig
-    {
-        public static int WebSocketMaxMessageBytes { get; set; } = 16 * 1024 * 1024; // 16 MB
-        public static int NamedPipeMaxMessageBytes { get; set; } = 10 * 1024 * 1024; // 10 MB
-        public static int PerClientQueueCapBytes { get; set; } = 2 * 1024 * 1024; // 2 MB
-        public static int RateLimitPerSecond { get; set; } = 20;
-        public static int RateLimitBurst { get; set; } = 60;
-        public static int SelectionNotificationCap { get; set; } = 200;
-        public static int GetMetadataMaxItems { get; set; } = 500;
-        public static int GetMetadataTimeoutSec { get; set; } = 30;
-    }
+	// Runtime configuration for IPC system - uses constants from Constants.IpcSettings as defaults
+	public static class IpcConfig
+	{
+		public static long WebSocketMaxMessageBytes { get; set; } = Constants.IpcSettings.WebSocketMaxMessageBytes;
+
+		public static long NamedPipeMaxMessageBytes { get; set; } = Constants.IpcSettings.NamedPipeMaxMessageBytes;
+
+		public static long PerClientQueueCapBytes { get; set; } = Constants.IpcSettings.PerClientQueueCapBytes;
+
+		public static int RateLimitPerSecond { get; set; } = Constants.IpcSettings.RateLimitPerSecond;
+
+		public static int RateLimitBurst { get; set; } = Constants.IpcSettings.RateLimitBurst;
+
+		public static int SelectionNotificationCap { get; set; } = Constants.IpcSettings.SelectionNotificationCap;
+
+		public static int GetMetadataMaxItems { get; set; } = Constants.IpcSettings.GetMetadataMaxItems;
+
+		public static int GetMetadataTimeoutSec { get; set; } = Constants.IpcSettings.GetMetadataTimeoutSec;
+	}
 }
