@@ -81,9 +81,60 @@ jobs:
           # Install XamlStyler for XAML formatting (used in the project)
           dotnet tool install --global XamlStyler.Console || true
           
+          # Install C# script runner for quick code execution
+          dotnet tool install --global dotnet-script || true
+          
           echo "Installed dotnet tools:"
           dotnet tool list --global
 
+      - name: Setup C# compiler (csc)
+        run: |
+          # Create convenient aliases for the C# compiler
+          # The Roslyn compiler is included with the .NET SDK
+          
+          # Find the Roslyn compiler location
+          ROSLYN_PATH=$(find ~/.dotnet/sdk -name "csc.dll" | head -1)
+          ROSLYN_DIR=$(dirname "$ROSLYN_PATH")
+          
+          if [ -n "$ROSLYN_PATH" ]; then
+            echo "Found Roslyn compiler at: $ROSLYN_PATH"
+            
+            # Create a wrapper script for csc
+            cat > ~/.local/bin/csc << EOF
+          #!/bin/bash
+          exec dotnet "$ROSLYN_PATH" "\$@"
+          EOF
+            chmod +x ~/.local/bin/csc
+            
+            # Also create csi (C# Interactive) wrapper
+            CSI_PATH="$ROSLYN_DIR/csi.dll"
+            if [ -f "$CSI_PATH" ]; then
+              cat > ~/.local/bin/csi << EOF
+          #!/bin/bash
+          exec dotnet "$CSI_PATH" "\$@"
+          EOF
+              chmod +x ~/.local/bin/csi
+              echo "Created csi (C# Interactive) wrapper"
+            fi
+            
+            # Ensure ~/.local/bin is in PATH
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.profile
+            
+            # Add to current session
+            export PATH="$HOME/.local/bin:$PATH"
+            
+            echo "C# compiler setup complete. Available commands:"
+            echo "  csc - C# compiler"
+            echo "  csi - C# Interactive REPL (if available)"
+            echo "  dotnet-script - C# scripting with NuGet support"
+          else
+            echo "Warning: Could not find Roslyn compiler in .NET SDK"
+          fi
+          
+          # Create directory if it doesn't exist
+          mkdir -p ~/.local/bin
+      
       - name: Restore NuGet packages
         run: |
           echo "Restoring packages..."
@@ -95,11 +146,12 @@ jobs:
           echo "Package restore completed."
           echo "Note: C++ projects (.vcxproj) will still show warnings - this is expected."
           
-      - name: Verify Windows targeting configuration
+      - name: Verify configuration
         run: |
-          echo "=== Verification of Windows targeting setup ==="
+          echo "=== Verification of setup ==="
           
           # Test that we can build a simple Windows-targeted project
+          echo "Testing Windows targeting..."
           cat > test-windows-targeting.csproj << 'EOF'
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup>
@@ -116,6 +168,42 @@ jobs:
           fi
           
           rm -f test-windows-targeting.csproj
+          
+          # Test C# compiler
+          echo ""
+          echo "Testing C# compiler..."
+          cat > test.cs << 'EOF'
+          using System;
+          class Program {
+              static void Main() {
+                  Console.WriteLine("C# compiler is working!");
+              }
+          }
+          EOF
+          
+          # Update PATH for this session
+          export PATH="$HOME/.local/bin:$PATH"
+          
+          if command -v csc &> /dev/null; then
+            if csc test.cs -out:test.exe 2>/dev/null; then
+              echo "✓ csc (C# compiler) is working!"
+            else
+              echo "⚠ csc found but compilation test failed"
+            fi
+          else
+            echo "⚠ csc command not found in PATH"
+          fi
+          
+          if command -v dotnet-script &> /dev/null; then
+            echo "✓ dotnet-script is available for C# scripting"
+          fi
+          
+          rm -f test.cs test.exe
+          
+          echo ""
+          echo "=== Available C# tools ==="
+          echo "PATH: $PATH"
+          ls -la ~/.local/bin/ 2>/dev/null || echo "No custom binaries in ~/.local/bin"
           
           echo ""
           echo "=== Directory.Build.props content ==="
