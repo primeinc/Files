@@ -245,9 +245,7 @@ namespace Files.App.Communication
 							messageBuilder.Append(text);
 						}
 						else if (result.MessageType == WebSocketMessageType.Close)
-						{
 							return;
-						}
 
 					} while (!result.EndOfMessage);
 

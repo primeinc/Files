@@ -195,9 +195,7 @@ namespace Files.App.ViewModels
 
 				// Cap the number of items to process
 				if (pathStrings.Count > IpcConfig.GetMetadataMaxItems)
-				{
 					pathStrings = pathStrings.Take(IpcConfig.GetMetadataMaxItems).ToList();
-				}
 
 				using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(IpcConfig.GetMetadataTimeoutSec));
 				var metadata = await GetMetadataForPathsAsync(pathStrings, cts.Token);
@@ -361,21 +359,15 @@ namespace Files.App.ViewModels
 				// Reject device paths
 				if (upper.StartsWith(@"\\.\", StringComparison.Ordinal) ||
 				    upper.StartsWith(@"\\?\", StringComparison.Ordinal))
-				{
 					return false;
-				}
 
 				// Reject admin shares
 				if (upper.StartsWith(@"\\", StringComparison.Ordinal) && upper.Contains(@"\C$", StringComparison.Ordinal))
-				{
 					return false;
-				}
 
 				// Check for path traversal attempts
 				if (path.Contains("..") || path.Contains("~"))
-				{
 					return false;
-				}
 
 				// Must be rooted (absolute path)
 				return Path.IsPathRooted(path);
