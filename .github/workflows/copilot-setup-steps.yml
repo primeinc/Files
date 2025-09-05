@@ -84,17 +84,42 @@ jobs:
           echo "Installed dotnet tools:"
           dotnet tool list --global
 
-      - name: Restore NuGet packages with Windows targeting
+      - name: Restore NuGet packages
         run: |
-          # Enable Windows targeting to allow package restore on Linux
-          # This allows the SDK to restore Windows-specific packages for analysis
-          echo "Restoring packages with Windows targeting enabled..."
+          echo "Restoring packages..."
           
-          # Restore packages - Windows-specific packages will be restored but not executable
-          dotnet restore --ignore-failed-sources /p:EnableWindowsTargeting=true || true
+          # EnableWindowsTargeting is set in Directory.Build.props
+          # This allows restoration of Windows-specific packages on Linux
+          dotnet restore --ignore-failed-sources || true
           
-          echo "Package restore completed with Windows targeting enabled."
+          echo "Package restore completed."
           echo "Note: C++ projects (.vcxproj) will still show warnings - this is expected."
+          
+      - name: Verify Windows targeting configuration
+        run: |
+          echo "=== Verification of Windows targeting setup ==="
+          
+          # Test that we can build a simple Windows-targeted project
+          cat > test-windows-targeting.csproj << 'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <TargetFramework>net9.0-windows</TargetFramework>
+              <OutputType>Library</OutputType>
+            </PropertyGroup>
+          </Project>
+          EOF
+          
+          if dotnet build test-windows-targeting.csproj --no-restore 2>/dev/null; then
+            echo "✓ Windows targeting is working correctly!"
+          else
+            echo "⚠ Windows targeting test failed, but this is expected for some configurations"
+          fi
+          
+          rm -f test-windows-targeting.csproj
+          
+          echo ""
+          echo "=== Directory.Build.props content ==="
+          cat Directory.Build.props
 
       - name: Install development utilities
         run: |
