@@ -15,6 +15,14 @@ jobs:
   # The job MUST be called `copilot-setup-steps` or it will not be picked up by Copilot.
   copilot-setup-steps:
     runs-on: ubuntu-latest
+    
+    # Enable Windows targeting globally for the entire job
+    # This allows .NET SDK to restore Windows-specific packages on Linux
+    env:
+      EnableWindowsTargeting: true
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+      NUGET_XMLDOC_MODE: skip
 
     # Set the permissions to the lowest permissions possible needed for your steps.
     # Copilot will be given its own token for its operations.
@@ -27,6 +35,26 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # Cache restoration happens BEFORE installing SDKs and tools
+      # This way we can skip installations if everything is cached
+      - name: Cache NuGet packages
+        id: cache-nuget
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/Directory.Packages.props', '**/Directory.Build.props', 'global.json') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+      
+      - name: Cache .NET tools
+        id: cache-tools
+        uses: actions/cache@v4
+        with:
+          path: ~/.dotnet/tools
+          key: ${{ runner.os }}-dotnet-tools-${{ hashFiles('.github/workflows/copilot-setup-steps.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-dotnet-tools-
 
       - name: Setup .NET 9 SDK
         uses: actions/setup-dotnet@v4
@@ -43,6 +71,8 @@ jobs:
         run: dotnet --version
 
       - name: Install dotnet tools
+        # Only install if cache wasn't hit
+        if: steps.cache-tools.outputs.cache-hit != 'true'
         run: |
           # Install code formatting and analysis tools
           dotnet tool install --global dotnet-format || true
@@ -54,20 +84,17 @@ jobs:
           echo "Installed dotnet tools:"
           dotnet tool list --global
 
-      - name: Restore NuGet packages (attempt)
+      - name: Restore NuGet packages with Windows targeting
         run: |
-          # Try to restore packages for Linux-compatible projects
-          # This may partially fail for Windows-specific projects, which is expected
-          dotnet restore --ignore-failed-sources || true
-          echo "Package restore attempted. Some packages may not be available on Linux."
-
-      - name: Cache NuGet packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
+          # Enable Windows targeting to allow package restore on Linux
+          # This allows the SDK to restore Windows-specific packages for analysis
+          echo "Restoring packages with Windows targeting enabled..."
+          
+          # Restore packages - Windows-specific packages will be restored but not executable
+          dotnet restore --ignore-failed-sources /p:EnableWindowsTargeting=true || true
+          
+          echo "Package restore completed with Windows targeting enabled."
+          echo "Note: C++ projects (.vcxproj) will still show warnings - this is expected."
 
       - name: Install development utilities
         run: |
