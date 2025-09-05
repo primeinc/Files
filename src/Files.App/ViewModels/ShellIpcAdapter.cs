@@ -15,7 +15,7 @@ namespace Files.App.ViewModels
 	// Adapter with strict allowlist, path normalization, selection cap and structured errors.
 	public sealed class ShellIpcAdapter
 	{
-		// Fields
+		// readonly fields
 		private readonly ShellViewModel _shell;
 		private readonly IAppCommunicationService _comm;
 		private readonly ActionRegistry _actions;
@@ -23,6 +23,8 @@ namespace Files.App.ViewModels
 		private readonly UIOperationQueue _uiQueue;
 		private readonly ILogger<ShellIpcAdapter> _logger;
 		private readonly TimeSpan _coalesceWindow = TimeSpan.FromMilliseconds(100d);
+
+		// Fields
 		private DateTime _lastWdmNotif = DateTime.MinValue;
 
 		// Constructor

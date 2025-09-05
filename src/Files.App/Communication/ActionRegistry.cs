@@ -7,6 +7,7 @@ namespace Files.App.Communication
 	// Simple action registry for IPC system
 	public sealed class ActionRegistry
 	{
+		// readonly fields
 		private readonly HashSet<string> _allowedActions = new(StringComparer.OrdinalIgnoreCase)
 		{
 			"navigate",
@@ -18,6 +19,7 @@ namespace Files.App.Communication
 			"showProperties"
 		};
 
+		// Public methods
 		public bool CanExecute(string actionId, object? context = null)
 		{
 			if (string.IsNullOrEmpty(actionId))

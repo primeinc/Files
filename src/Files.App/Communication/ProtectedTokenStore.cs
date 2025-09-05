@@ -9,12 +9,15 @@ namespace Files.App.Communication
 	// DPAPI-backed token store. Stores encrypted token in LocalSettings and maintains an epoch for rotation.
 	internal static class ProtectedTokenStore
 	{
+		// Static fields
 		private const string KEY_TOKEN = "Files_RemoteControl_ProtectedToken";
 		private const string KEY_ENABLED = "Files_RemoteControl_Enabled";
 		private const string KEY_EPOCH = "Files_RemoteControl_TokenEpoch";
 
+		// Static properties
 		private static ApplicationDataContainer Settings => ApplicationData.Current.LocalSettings;
 
+		// Static methods
 		public static bool IsEnabled()
 		{
 			if (Settings.Values.TryGetValue(KEY_ENABLED, out var v) && v is bool b) 

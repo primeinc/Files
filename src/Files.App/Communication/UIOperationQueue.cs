@@ -7,13 +7,16 @@ namespace Files.App.Communication
 	// Ensures all UI-affecting operations are serialized on the dispatcher thread
 	public sealed class UIOperationQueue
 	{
+		// readonly fields
 		private readonly DispatcherQueue _dispatcher;
 
+		// Constructor
 		public UIOperationQueue(DispatcherQueue dispatcher)
 		{
 			_dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
 		}
 
+		// Public methods
 		public Task EnqueueAsync(Func<Task> operation)
 		{
 			var tcs = new TaskCompletionSource<object?>();

@@ -19,8 +19,10 @@ namespace Files.App.Communication
 
 	public sealed class RpcMethodRegistry
 	{
+		// readonly fields
 		private readonly ConcurrentDictionary<string, RpcMethod> _methods = new();
 
+		// Constructor
 		public RpcMethodRegistry()
 		{
 			Register(new RpcMethod { Name = "handshake", RequiresAuth = false, AllowNotifications = false });
@@ -31,6 +33,7 @@ namespace Files.App.Communication
 			Register(new RpcMethod { Name = "executeAction", RequiresAuth = true, AllowNotifications = false });
 		}
 
+		// Public methods
 		public void Register(RpcMethod method) => _methods[method.Name] = method;
 
 		public bool TryGet(string name, out RpcMethod method) => _methods.TryGetValue(name, out method);

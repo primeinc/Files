@@ -14,7 +14,7 @@ namespace Files.App.Communication
 {
 	public sealed class WebSocketAppCommunicationService : IAppCommunicationService, IDisposable
 	{
-		// Fields
+		// readonly fields
 		private readonly HttpListener _httpListener;
 		private readonly RpcMethodRegistry _methodRegistry;
 		private readonly ILogger<WebSocketAppCommunicationService> _logger;
@@ -22,9 +22,13 @@ namespace Files.App.Communication
 		private readonly Timer _keepaliveTimer;
 		private readonly Timer _cleanupTimer;
 		private readonly CancellationTokenSource _cancellation = new();
+
+		// Fields
 		private string? _currentToken;
 		private int _currentEpoch;
 		private bool _isStarted;
+
+		// _disposed field
 		private bool _disposed;
 
 		// Events

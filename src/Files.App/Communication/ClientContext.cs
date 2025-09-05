@@ -8,12 +8,16 @@ namespace Files.App.Communication
 	// Per-client state with token-bucket, lossy enqueue and LastSeenUtc tracked.
 	public sealed class ClientContext : IDisposable
 	{
-		// Fields
+		// readonly fields
 		private readonly object _rateLock = new();
 		private readonly ConcurrentQueue<(string payload, bool isNotification, string? method)> _sendQueue = new();
+
+		// Fields
 		private long _queuedBytes = 0;
 		private int _tokens;
 		private DateTime _lastRefill;
+
+		// _disposed field
 		private bool _disposed;
 
 		// Properties  

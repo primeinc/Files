@@ -18,18 +18,22 @@ namespace Files.App.Communication
 {
 	public sealed class NamedPipeAppCommunicationService : IAppCommunicationService, IDisposable
 	{
-		// Fields
+		// readonly fields
 		private readonly RpcMethodRegistry _methodRegistry;
 		private readonly ILogger<NamedPipeAppCommunicationService> _logger;
 		private readonly ConcurrentDictionary<Guid, ClientContext> _clients = new();
 		private readonly Timer _keepaliveTimer;
 		private readonly Timer _cleanupTimer;
 		private readonly CancellationTokenSource _cancellation = new();
+
+		// Fields
 		private string? _currentToken;
 		private int _currentEpoch;
 		private string? _pipeName;
 		private bool _isStarted;
 		private Task? _acceptTask;
+
+		// _disposed field
 		private bool _disposed;
 
 		// Events
