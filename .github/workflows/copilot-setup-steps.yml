@@ -1,0 +1,122 @@
+name: "Copilot Setup Steps"
+
+# Automatically run the setup steps when they are changed to allow for easy validation, and
+# allow manual testing through the repository's "Actions" tab
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+  # The job MUST be called `copilot-setup-steps` or it will not be picked up by Copilot.
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+
+    # Set the permissions to the lowest permissions possible needed for your steps.
+    # Copilot will be given its own token for its operations.
+    permissions:
+      # If you want to clone the repository as part of your setup steps, for example to install dependencies, you'll need the `contents: read` permission.
+      contents: read
+
+    # You can define any steps you want, and they will run before the agent starts.
+    # If you do not check out your code, Copilot will do this for you.
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 9 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+          dotnet-quality: 'ga'
+
+      - name: Setup .NET 8 SDK (for compatibility)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Display .NET version
+        run: dotnet --version
+
+      - name: Install dotnet tools
+        run: |
+          # Install code formatting and analysis tools
+          dotnet tool install --global dotnet-format || true
+          dotnet tool install --global dotnet-reportgenerator-globaltool || true
+          
+          # Install XamlStyler for XAML formatting (used in the project)
+          dotnet tool install --global XamlStyler.Console || true
+          
+          echo "Installed dotnet tools:"
+          dotnet tool list --global
+
+      - name: Restore NuGet packages (attempt)
+        run: |
+          # Try to restore packages for Linux-compatible projects
+          # This may partially fail for Windows-specific projects, which is expected
+          dotnet restore --ignore-failed-sources || true
+          echo "Package restore attempted. Some packages may not be available on Linux."
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Install development utilities
+        run: |
+          # Install useful utilities for code analysis and development
+          sudo apt-get update
+          sudo apt-get install -y \
+            jq \
+            tree \
+            ripgrep \
+            fd-find
+
+      - name: Setup environment variables
+        run: |
+          # Set up any environment variables that might be useful
+          echo "DOTNET_NOLOGO=true" >> $GITHUB_ENV
+          echo "DOTNET_CLI_TELEMETRY_OPTOUT=true" >> $GITHUB_ENV
+          echo "NUGET_XMLDOC_MODE=skip" >> $GITHUB_ENV
+          
+      - name: Display project information
+        run: |
+          echo "=== Project Structure ==="
+          tree -d -L 2 src/ || true
+          
+          echo ""
+          echo "=== .NET SDKs installed ==="
+          dotnet --list-sdks
+          
+          echo ""
+          echo "=== .NET Runtimes installed ==="
+          dotnet --list-runtimes
+          
+          echo ""
+          echo "=== Project files ==="
+          find . -name "*.csproj" -o -name "*.slnx" -o -name "*.wapproj" | head -20
+
+      - name: Create Copilot helper scripts
+        run: |
+          # Create a script to help Copilot understand the project structure
+          cat > /tmp/copilot-project-info.sh << 'EOF'
+          #!/bin/bash
+          echo "This is a Windows Files application project."
+          echo "Main components:"
+          echo "- Files.App: Main application (Windows-specific)"
+          echo "- Core libraries: May contain cross-platform compatible code"
+          echo ""
+          echo "Note: This project is primarily Windows-targeted."
+          echo "Full builds require Windows and Visual Studio/MSBuild."
+          echo "On Linux, only basic .NET SDK operations are available."
+          EOF
+          chmod +x /tmp/copilot-project-info.sh
+          
+          echo "Created helper script at /tmp/copilot-project-info.sh"
