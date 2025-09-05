@@ -320,7 +320,9 @@ namespace Files.App.ViewModels
 				await _uiQueue.EnqueueAsync(async () =>
 				{
 					// Execute the action based on actionId
-					// TODO: This should integrate with the proper Files action system once available
+					// NOTE: This implements basic actions. Full integration would require
+					// connecting to the Files action system (IAction implementations).
+					// See merge checklist in docs/remote-control/README.md
 					switch (actionId.ToLowerInvariant())
 					{
 						case "navigate":
@@ -333,23 +335,23 @@ namespace Files.App.ViewModels
 							break;
 						case "copypath":
 							// TODO: Implement copy path action
-							_logger.LogInformation("Copy path action requested (not yet implemented)");
+							_logger.LogInformation("Copy path action requested (requires IAction integration)");
 							break;
 						case "openinnewtab":
 							// TODO: Implement open in new tab action  
-							_logger.LogInformation("Open in new tab action requested (not yet implemented)");
+							_logger.LogInformation("Open in new tab action requested (requires IAction integration)");
 							break;
 						case "openinnewwindow":
 							// TODO: Implement open in new window action
-							_logger.LogInformation("Open in new window action requested (not yet implemented)");
+							_logger.LogInformation("Open in new window action requested (requires IAction integration)");
 							break;
 						case "toggledualpane":
 							// TODO: Implement toggle dual pane action
-							_logger.LogInformation("Toggle dual pane action requested (not yet implemented)");
+							_logger.LogInformation("Toggle dual pane action requested (requires IAction integration)");
 							break;
 						case "showproperties":
 							// TODO: Implement show properties action
-							_logger.LogInformation("Show properties action requested (not yet implemented)");
+							_logger.LogInformation("Show properties action requested (requires IAction integration)");
 							break;
 						default:
 							_logger.LogWarning("Unknown action {ActionId}", actionId);
