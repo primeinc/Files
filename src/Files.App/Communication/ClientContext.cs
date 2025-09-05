@@ -82,54 +82,61 @@ namespace Files.App.Communication
 			}
 		}
 
-		// Try enqueue with lossy policy; drops oldest notifications of the same method first when needed.
+		// Try enqueue with lossy policy; drops oldest notifications when queue is full
 		public bool TryEnqueue(string payload, bool isNotification, string? method = null)
 		{
 			var bytes = Encoding.UTF8.GetByteCount(payload);
-			var newVal = Interlocked.Add(ref _queuedBytes, bytes);
-			if (newVal > MaxQueuedBytes)
+			var currentBytes = Interlocked.Read(ref _queuedBytes);
+			
+			// If adding this message would exceed capacity, try to make room
+			if (currentBytes + bytes > MaxQueuedBytes)
 			{
-				// attempt to free by dropping oldest notifications (prefer same-method)
-				int freed = 0;
-				var initialQueue = new List<(string payload, bool isNotification, string? method)>();
-				while (SendQueue.TryDequeue(out var old))
+				// For notifications, we can drop them when queue is full (lossy behavior)
+				if (isNotification)
 				{
-					if (!old.isNotification)
+					// Try to drop some older notifications to make room
+					var itemsToKeep = new List<(string payload, bool isNotification, string? method)>();
+					var freedBytes = 0;
+					var targetFreedBytes = bytes + (MaxQueuedBytes / 10); // Free a bit extra to avoid frequent cleanup
+					
+					// Drain queue and decide what to keep
+					while (SendQueue.TryDequeue(out var item) && freedBytes < targetFreedBytes)
 					{
-						initialQueue.Add(old); // keep responses
+						if (!item.isNotification)
+						{
+							// Always keep responses
+							itemsToKeep.Add(item);
+						}
+						else
+						{
+							// Drop this notification to free space
+							var itemBytes = Encoding.UTF8.GetByteCount(item.payload);
+							Interlocked.Add(ref _queuedBytes, -itemBytes);
+							freedBytes += itemBytes;
+						}
 					}
-					else if (old.method != null && method != null && old.method.Equals(method, StringComparison.OrdinalIgnoreCase) && freed == 0)
+					
+					// Re-queue the items we're keeping
+					foreach (var item in itemsToKeep)
+						SendQueue.Enqueue(item);
+					
+					// Check if we freed enough space
+					if (Interlocked.Read(ref _queuedBytes) + bytes > MaxQueuedBytes)
 					{
-						// drop one older of same method
-						var b = Encoding.UTF8.GetByteCount(old.payload);
-						Interlocked.Add(ref _queuedBytes, -b);
-						freed += b;
-						break;
-					}
-					else
-					{
-						// for fairness, try dropping other notifications as well
-						var b = Encoding.UTF8.GetByteCount(old.payload);
-						Interlocked.Add(ref _queuedBytes, -b);
-						freed += b;
-						if (Interlocked.Read(ref _queuedBytes) <= MaxQueuedBytes) 
-							break;
+						// Still not enough space, drop this message
+						return false;
 					}
 				}
-
-				// push back preserved responses
-				foreach (var item in initialQueue) 
-					SendQueue.Enqueue(item);
-
-				newVal = Interlocked.Read(ref _queuedBytes);
-				if (newVal + bytes > MaxQueuedBytes)
+				else
 				{
-					// still cannot enqueue
+					// For responses, never drop - just reject if queue is full
 					return false;
 				}
 			}
 
+			// Add the message to queue
 			SendQueue.Enqueue((payload, isNotification, method));
+			Interlocked.Add(ref _queuedBytes, bytes);
 			return true;
 		}
 

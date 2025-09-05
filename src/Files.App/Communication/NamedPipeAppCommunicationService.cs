@@ -12,7 +12,6 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Windows.Storage;
 
 namespace Files.App.Communication
 {
@@ -124,10 +123,10 @@ namespace Files.App.Communication
 			}
 		}
 
-		public async Task SendResponseAsync(ClientContext client, JsonRpcMessage response)
+		public Task SendResponseAsync(ClientContext client, JsonRpcMessage response)
 		{
 			if (client?.TransportHandle is not NamedPipeServerStream pipe || !pipe.IsConnected)
-				return;
+				return Task.CompletedTask;
 
 			try
 			{
@@ -142,12 +141,14 @@ namespace Files.App.Communication
 			{
 				_logger.LogError(ex, "Error queuing response for client {ClientId}", client.Id);
 			}
+
+			return Task.CompletedTask;
 		}
 
-		public async Task BroadcastAsync(JsonRpcMessage notification)
+		public Task BroadcastAsync(JsonRpcMessage notification)
 		{
 			if (!_isStarted)
-				return;
+				return Task.CompletedTask;
 
 			var json = notification.ToJson();
 			var activeclients = _clients.Values
@@ -169,6 +170,8 @@ namespace Files.App.Communication
 					_logger.LogError(ex, "Error queuing notification for client {ClientId}", client.Id);
 				}
 			}
+
+			return Task.CompletedTask;
 		}
 
 		// Private methods

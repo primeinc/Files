@@ -48,8 +48,9 @@ namespace Files.App.Communication
 					var unprotected = await provider.UnprotectAsync(protectedBuf);
 					return CryptographicBuffer.ConvertBinaryToString(BinaryStringEncoding.Utf8, unprotected);
 				}
-				catch
+				catch (Exception ex)
 				{
+					// TODO: Log the exception (e.g. App.Logger.LogWarning(ex, "Failed to decrypt token, generating new one"))
 					// fallback to regen
 				}
 			}
