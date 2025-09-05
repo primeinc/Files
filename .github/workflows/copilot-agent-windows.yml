@@ -1,0 +1,91 @@
+# Copyright (c) Files Community
+# Licensed under the MIT License.
+
+# Abstract:
+#   This workflow is specifically designed for Copilot Agent tasks and forces
+#   execution on Windows runners. This ensures compatibility with Windows-specific
+#   development tools and the Files app environment.
+
+name: Copilot Agent — Windows runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_description:
+        description: 'Description of the Copilot Agent task to execute'
+        required: false
+        default: 'Copilot Agent task execution'
+        type: string
+
+env:
+  WORKING_DIR: ${{ github.workspace }}
+  SOLUTION_PATH: '${{ github.workspace }}\Files.slnx'
+
+jobs:
+  copilot-agent-task:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+      
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+      
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+      
+      - name: Display environment information
+        shell: pwsh
+        run: |
+          Write-Host "Running Copilot Agent job on Windows"
+          Write-Host "OS Version: $([System.Environment]::OSVersion)"
+          Write-Host "PowerShell Version: $($PSVersionTable.PSVersion)"
+          Write-Host "Working Directory: $env:WORKING_DIR"
+          Write-Host "Task Description: ${{ github.event.inputs.task_description }}"
+          
+          # Display .NET and MSBuild information
+          Write-Host "`n=== Development Environment ==="
+          dotnet --version
+          msbuild -version
+          
+          # Display repository information
+          Write-Host "`n=== Repository Information ==="
+          Write-Host "Repository: ${{ github.repository }}"
+          Write-Host "Branch: ${{ github.ref_name }}"
+          Write-Host "Commit SHA: ${{ github.sha }}"
+      
+      - name: Restore project dependencies
+        shell: pwsh
+        run: |
+          Write-Host "Restoring Files project dependencies..."
+          msbuild $env:SOLUTION_PATH `
+            -t:Restore `
+            -p:Platform=x64 `
+            -p:Configuration=Debug `
+            -v:minimal
+      
+      - name: Run Copilot Agent task (placeholder)
+        shell: pwsh
+        run: |
+          Write-Host "=== Copilot Agent Task Execution ==="
+          Write-Host "This is a placeholder for Copilot Agent commands."
+          Write-Host "The agent can now execute tasks in a properly configured Windows environment."
+          Write-Host "Available tools: MSBuild, .NET CLI, PowerShell, NuGet"
+          Write-Host ""
+          Write-Host "Task: ${{ github.event.inputs.task_description }}"
+          Write-Host ""
+          Write-Host "Environment is ready for Windows-specific development tasks."
+          
+          # Verify the Files solution can be analyzed
+          if (Test-Path $env:SOLUTION_PATH) {
+            Write-Host "✓ Files solution found and accessible"
+          } else {
+            Write-Host "✗ Files solution not found"
+            exit 1
+          }

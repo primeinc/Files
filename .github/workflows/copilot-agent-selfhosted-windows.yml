@@ -1,0 +1,97 @@
+# Copyright (c) Files Community
+# Licensed under the MIT License.
+
+# Abstract:
+#   This workflow is designed for Copilot Agent tasks using self-hosted Windows runners.
+#   Use this when you need specific software, Windows containers, or hardware that
+#   is not available on GitHub-hosted runners.
+
+name: Copilot Agent — Self-hosted Windows runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_description:
+        description: 'Description of the Copilot Agent task to execute'
+        required: false
+        default: 'Copilot Agent task execution on self-hosted runner'
+        type: string
+
+env:
+  WORKING_DIR: ${{ github.workspace }}
+  SOLUTION_PATH: '${{ github.workspace }}\Files.slnx'
+
+jobs:
+  copilot-agent-task:
+    # Configure for self-hosted Windows runner with custom labels
+    # Adjust the labels according to your self-hosted runner configuration
+    runs-on: [self-hosted, windows, x64, copilot-windows]
+    
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+      
+      - name: Setup .NET (if not pre-installed on runner)
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      
+      - name: Display environment information
+        shell: pwsh
+        run: |
+          Write-Host "Running on self-hosted Windows runner"
+          Write-Host "OS Version: $([System.Environment]::OSVersion)"
+          Write-Host "PowerShell Version: $($PSVersionTable.PSVersion)"
+          Write-Host "Working Directory: $env:WORKING_DIR"
+          Write-Host "Task Description: ${{ github.event.inputs.task_description }}"
+          
+          # Display runner-specific information
+          Write-Host "`n=== Runner Information ==="
+          Write-Host "Computer Name: $env:COMPUTERNAME"
+          Write-Host "User: $env:USERNAME"
+          Write-Host "Runner Labels: self-hosted, windows, x64, copilot-windows"
+          
+          # Display available development tools
+          Write-Host "`n=== Available Tools ==="
+          try { dotnet --version; Write-Host "✓ .NET CLI available" } catch { Write-Host "✗ .NET CLI not found" }
+          try { msbuild -version | Select-Object -First 3; Write-Host "✓ MSBuild available" } catch { Write-Host "✗ MSBuild not found" }
+          
+          # Display repository information
+          Write-Host "`n=== Repository Information ==="
+          Write-Host "Repository: ${{ github.repository }}"
+          Write-Host "Branch: ${{ github.ref_name }}"
+          Write-Host "Commit SHA: ${{ github.sha }}"
+      
+      - name: Restore project dependencies
+        shell: pwsh
+        run: |
+          Write-Host "Restoring Files project dependencies on self-hosted runner..."
+          msbuild $env:SOLUTION_PATH `
+            -t:Restore `
+            -p:Platform=x64 `
+            -p:Configuration=Debug `
+            -v:minimal
+      
+      - name: Run Copilot Agent task (placeholder)
+        shell: pwsh
+        run: |
+          Write-Host "=== Copilot Agent Task Execution (Self-hosted) ==="
+          Write-Host "Running on self-hosted Windows runner with custom capabilities."
+          Write-Host "This runner may have access to:"
+          Write-Host "  - Specific development tools and SDKs"
+          Write-Host "  - Custom hardware configurations"
+          Write-Host "  - Windows containers or Docker Desktop"
+          Write-Host "  - Enterprise network resources"
+          Write-Host ""
+          Write-Host "Task: ${{ github.event.inputs.task_description }}"
+          Write-Host ""
+          
+          # Verify the Files solution can be analyzed
+          if (Test-Path $env:SOLUTION_PATH) {
+            Write-Host "✓ Files solution found and accessible"
+          } else {
+            Write-Host "✗ Files solution not found"
+            exit 1
+          }
+          
+          Write-Host "Self-hosted environment is ready for specialized Windows development tasks."
