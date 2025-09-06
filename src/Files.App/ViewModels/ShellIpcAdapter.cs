@@ -1,476 +1,539 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 using Files.App.Communication;
 using Files.App.Communication.Models;
-using Microsoft.Extensions.Logging;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
+using System.Threading.Tasks;
 using Microsoft.UI.Dispatching;
+using System.Threading;
+using System.IO;
+using Microsoft.Extensions.Logging;
+using Files.App.Data.Contracts;
 
 namespace Files.App.ViewModels
 {
-	// Adapter with strict allowlist, path normalization, selection cap and structured errors.
-	public sealed class ShellIpcAdapter
-	{
-		// readonly fields
-		private readonly ShellViewModel _shell;
-		private readonly IAppCommunicationService _comm;
-		private readonly ActionRegistry _actions;
-		private readonly RpcMethodRegistry _methodRegistry;
-		private readonly UIOperationQueue _uiQueue;
-		private readonly ILogger<ShellIpcAdapter> _logger;
-		private readonly TimeSpan _coalesceWindow = TimeSpan.FromMilliseconds(100d);
+    // Adapter with strict allowlist, path normalization, selection cap and structured errors.
+    public sealed class ShellIpcAdapter
+    {
+        // Public methods for IpcCoordinator to call
+        public async Task<object> GetStateAsync()
+        {
+            // Must run on UI thread to access Frame properties
+            var tcs = new TaskCompletionSource<object>();
+            
+            await _uiQueue.EnqueueAsync(async () =>
+            {
+                try
+                {
+                    var state = new
+                    {
+                        currentPath = _nav.CurrentPath ?? _shell.WorkingDirectory,
+                        canNavigateBack = _nav.CanGoBack,
+                        canNavigateForward = _nav.CanGoForward,
+                        isLoading = _shell.FilesAndFolders.Count == 0,
+                        itemCount = _shell.FilesAndFolders.Count
+                    };
+                    tcs.SetResult(state);
+                }
+                catch (Exception ex)
+                {
+                    tcs.SetException(ex);
+                }
+                await Task.CompletedTask;
+            }).ConfigureAwait(false);
+            
+            return await tcs.Task.ConfigureAwait(false);
+        }
 
-		// Fields
-		private DateTime _lastWdmNotif = DateTime.MinValue;
+        public async Task<object> ListActionsAsync()
+        {
+            var tcs = new TaskCompletionSource<object>();
+            
+            await _uiQueue.EnqueueAsync(async () =>
+            {
+                try
+                {
+                    var actions = _actions.GetAllowedActions().Select(actionId => new
+                    {
+                        id = actionId,
+                        name = actionId,
+                        description = $"Execute {actionId} action"
+                    }).ToArray();
+                    tcs.SetResult(new { actions });
+                }
+                catch (Exception ex)
+                {
+                    tcs.SetException(ex);
+                }
+                await Task.CompletedTask;
+            }).ConfigureAwait(false);
+            
+            return await tcs.Task.ConfigureAwait(false);
+        }
 
-		// Constructor
-		public ShellIpcAdapter(
-			ShellViewModel shell,
-			IAppCommunicationService comm,
-			ActionRegistry actions,
-			RpcMethodRegistry methodRegistry,
-			DispatcherQueue dispatcher,
-			ILogger<ShellIpcAdapter> logger)
-		{
-			_shell = shell ?? throw new ArgumentNullException(nameof(shell));
-			_comm = comm ?? throw new ArgumentNullException(nameof(comm));
-			_actions = actions ?? throw new ArgumentNullException(nameof(actions));
-			_methodRegistry = methodRegistry ?? throw new ArgumentNullException(nameof(methodRegistry));
-			_logger = logger ?? throw new ArgumentNullException(nameof(logger));
-			_uiQueue = new UIOperationQueue(dispatcher ?? throw new ArgumentNullException(nameof(dispatcher)));
+        public async Task<object> NavigateAsync(string path)
+        {
+            if (!TryNormalizePath(path, out var normalizedPath))
+            {
+                throw new ArgumentException("Invalid path");
+            }
 
-			_comm.OnRequestReceived += HandleRequestAsync;
+            await _uiQueue.EnqueueAsync(async () =>
+            {
+                await NavigateToPathNormalized(normalizedPath);
+            }).ConfigureAwait(false);
 
-			_shell.WorkingDirectoryModified += Shell_WorkingDirectoryModified;
-			// Note: SelectionChanged event would need to be added to ShellViewModel or accessed via different mechanism
-		}
+            return new { status = "ok" };
+        }
 
-		// Private methods - Event handlers
-		private async void Shell_WorkingDirectoryModified(object? sender, WorkingDirectoryModifiedEventArgs e)
-		{
-			// Coalesce rapid directory changes
-			var now = DateTime.UtcNow;
-			if ((now - _lastWdmNotif) < _coalesceWindow)
-				return;
+        public async Task<object> GetMetadataAsync(List<string> paths)
+        {
+            // GetFileMetadata uses file system, doesn't need UI thread
+            return await Task.Run(() =>
+            {
+                var metadata = GetFileMetadata(paths);
+                return new { items = metadata };
+            }).ConfigureAwait(false);
+        }
 
-			_lastWdmNotif = now;
+        public async Task<object> ExecuteActionAsync(string actionId)
+        {
+            if (string.IsNullOrEmpty(actionId) || !_actions.CanExecute(actionId))
+            {
+                throw new ArgumentException("Action not found or cannot execute");
+            }
 
-			var notification = new JsonRpcMessage
-			{
-				Method = "workingDirectoryChanged",
-				Params = JsonSerializer.SerializeToElement(new
-				{
-					path = NormalizePath(e.Path),
-					isValidPath = IsValidPath(e.Path)
-				})
-			};
+            await _uiQueue.EnqueueAsync(async () =>
+            {
+                await ExecuteActionById(actionId);
+            }).ConfigureAwait(false);
 
-			try
-			{
-				await _comm.BroadcastAsync(notification);
-			}
-			catch (Exception ex)
-			{
-				_logger.LogError(ex, "Error broadcasting working directory changed notification");
-			}
-		}
+            return new { status = "ok" };
+        }
+        private readonly ShellViewModel _shell;
+        private readonly IAppCommunicationService _comm;
+        private readonly ActionRegistry _actions;
+        private readonly RpcMethodRegistry _methodRegistry;
+        private readonly UIOperationQueue _uiQueue;
+        private readonly ILogger<ShellIpcAdapter> _logger;
+        private readonly INavigationStateProvider _nav;
 
-		private async Task HandleRequestAsync(ClientContext client, JsonRpcMessage request)
-		{
-			if (string.IsNullOrEmpty(request.Method))
-			{
-				var error = JsonRpcMessage.MakeError(request.Id, -32600, "Invalid Request");
-				await _comm.SendResponseAsync(client, error);
-				return;
-			}
+        private readonly TimeSpan _coalesceWindow = TimeSpan.FromMilliseconds(100);
+        private DateTime _lastWdmNotif = DateTime.MinValue;
 
-			try
-			{
-				switch (request.Method)
-				{
-					case "getState":
-						await HandleGetStateAsync(client, request);
-						break;
+        public ShellIpcAdapter(
+            ShellViewModel shell,
+            IAppCommunicationService comm,
+            ActionRegistry actions,
+            RpcMethodRegistry methodRegistry,
+            DispatcherQueue dispatcher,
+            ILogger<ShellIpcAdapter> logger,
+            INavigationStateProvider nav)
+        {
+            _shell = shell ?? throw new ArgumentNullException(nameof(shell));
+            _comm = comm ?? throw new ArgumentNullException(nameof(comm));
+            _actions = actions ?? throw new ArgumentNullException(nameof(actions));
+            _methodRegistry = methodRegistry ?? throw new ArgumentNullException(nameof(methodRegistry));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _nav = nav ?? throw new ArgumentNullException(nameof(nav));
+            _uiQueue = new UIOperationQueue(dispatcher ?? throw new ArgumentNullException(nameof(dispatcher)));
 
-					case "listActions":
-						await HandleListActionsAsync(client, request);
-						break;
+            // Don't subscribe here - IpcCoordinator routes to us
+            // _comm.OnRequestReceived += HandleRequestAsync;
 
-					case "getMetadata":
-						await HandleGetMetadataAsync(client, request);
-						break;
+            _shell.WorkingDirectoryModified += Shell_WorkingDirectoryModified;
+            _nav.StateChanged += Nav_StateChanged;
+        }
 
-					case "navigate":
-						await HandleNavigateAsync(client, request);
-						break;
+        private async void Nav_StateChanged(object? sender, EventArgs e)
+        {
+            try
+            {
+                var notif = new JsonRpcMessage
+                {
+                    Method = "navigationStateChanged",
+                    Params = JsonSerializer.SerializeToElement(new { canNavigateBack = _nav.CanGoBack, canNavigateForward = _nav.CanGoForward, path = _nav.CurrentPath })
+                };
+                await _comm.BroadcastAsync(notif).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error broadcasting navigation state change");
+            }
+        }
 
-					case "executeAction":
-						await HandleExecuteActionAsync(client, request);
-						break;
+        private async void Shell_WorkingDirectoryModified(object? sender, WorkingDirectoryModifiedEventArgs e)
+        {
+            var now = DateTime.UtcNow;
+            if (now - _lastWdmNotif < _coalesceWindow) return;
+            _lastWdmNotif = now;
 
-					default:
-						var error = JsonRpcMessage.MakeError(request.Id, -32601, "Method not found");
-						await _comm.SendResponseAsync(client, error);
-						break;
-				}
-			}
-			catch (Exception ex)
-			{
-				_logger.LogError(ex, "Error handling request {Method} from client {ClientId}", request.Method, client.Id);
-				var error = JsonRpcMessage.MakeError(request.Id, -32603, "Internal error");
-				await _comm.SendResponseAsync(client, error);
-			}
-		}
+            try
+            {
+                var notif = new JsonRpcMessage
+                {
+                    Method = "workingDirectoryChanged",
+                    Params = JsonSerializer.SerializeToElement(new { path = e.Path, name = e.Name, isLibrary = e.IsLibrary })
+                };
 
-		private async Task HandleGetStateAsync(ClientContext client, JsonRpcMessage request)
-		{
-			try
-			{
-				var result = JsonRpcMessage.MakeResult(request.Id, new
-				{
-					currentPath = NormalizePath(_shell.FilesystemViewModel?.WorkingDirectory ?? string.Empty),
-					isValidPath = IsValidPath(_shell.FilesystemViewModel?.WorkingDirectory ?? string.Empty),
-					canNavigateBack = _shell.CanNavigateBackward,
-					canNavigateForward = _shell.CanNavigateForward,
-					selectedItemsCount = _shell.SlimContentPage?.SelectedItems?.Count ?? 0,
-					totalItemsCount = _shell.SlimContentPage?.FilesystemViewModel?.FilesAndFolders?.Count ?? 0
-				});
+                await _comm.BroadcastAsync(notif).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error broadcasting working directory change");
+            }
+        }
 
-				await _comm.SendResponseAsync(client, result);
-			}
-			catch (Exception ex)
-			{
-				_logger.LogError(ex, "Error getting application state");
-				var error = JsonRpcMessage.MakeError(request.Id, -32603, "Failed to get application state");
-				await _comm.SendResponseAsync(client, error);
-			}
-		}
+        // This method would need to be wired to the actual selection change event in ShellViewModel
+        public async void OnSelectionChanged(IEnumerable<string> selectedPaths)
+        {
+            try
+            {
+                var summary = selectedPaths?.Select(p => new {
+                    path = p,
+                    name = Path.GetFileName(p),
+                    isDir = Directory.Exists(p)
+                }) ?? Enumerable.Empty<object>();
 
-		private async Task HandleListActionsAsync(ClientContext client, JsonRpcMessage request)
-		{
-			try
-			{
-				var actions = _actions.GetAllowedActions().ToArray();
-				var result = JsonRpcMessage.MakeResult(request.Id, new
-				{
-					actions = actions,
-					count = actions.Length
-				});
+                var list = summary.Take(IpcConfig.SelectionNotificationCap).ToArray();
+                var notif = new JsonRpcMessage
+                {
+                    Method = "selectionChanged",
+                    Params = JsonSerializer.SerializeToElement(new {
+                        items = list,
+                        truncated = (summary.Count() > IpcConfig.SelectionNotificationCap)
+                    })
+                };
 
-				await _comm.SendResponseAsync(client, result);
-			}
-			catch (Exception ex)
-			{
-				_logger.LogError(ex, "Error listing actions");
-				var error = JsonRpcMessage.MakeError(request.Id, -32603, "Failed to list actions");
-				await _comm.SendResponseAsync(client, error);
-			}
-		}
+                await _comm.BroadcastAsync(notif).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error broadcasting selection change");
+            }
+        }
 
-		private async Task HandleGetMetadataAsync(ClientContext client, JsonRpcMessage request)
-		{
-			if (!request.Params.HasValue || !request.Params.Value.TryGetProperty("paths", out var pathsElement))
-			{
-				var error = JsonRpcMessage.MakeError(request.Id, -32602, "Invalid params - paths array required");
-				await _comm.SendResponseAsync(client, error);
-				return;
-			}
+        private static bool TryNormalizePath(string raw, out string normalized)
+        {
+            normalized = string.Empty;
+            if (string.IsNullOrWhiteSpace(raw)) return false;
+            if (raw.IndexOf('\0') >= 0) return false;
 
-			try
-			{
-				var pathStrings = new List<string>();
-				if (pathsElement.ValueKind == JsonValueKind.Array)
-				{
-					foreach (var pathElement in pathsElement.EnumerateArray())
-					{
-						var pathStr = pathElement.GetString();
-						if (!string.IsNullOrEmpty(pathStr))
-							pathStrings.Add(pathStr);
-					}
-				}
+            try
+            {
+                var p = Path.GetFullPath(raw);
+                // Reject device paths and odd prefixes
+                if (p.StartsWith(@"\\?\") || p.StartsWith(@"\\.\"))
+                    return false;
 
-				// Cap the number of items to process
-				if (pathStrings.Count > IpcConfig.GetMetadataMaxItems)
-					pathStrings = pathStrings.Take(IpcConfig.GetMetadataMaxItems).ToList();
+                normalized = p;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
 
-				using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(IpcConfig.GetMetadataTimeoutSec));
-				var metadata = await GetMetadataForPathsAsync(pathStrings, cts.Token);
+        private async Task HandleRequestAsync(ClientContext client, JsonRpcMessage request)
+        {
+            try
+            {
+                // Basic validation
+                if (!JsonRpcMessage.ValidJsonRpc(request) || JsonRpcMessage.IsInvalidRequest(request))
+                {
+                    if (!request.IsNotification)
+                        await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32600, "Invalid JSON-RPC")).ConfigureAwait(false);
+                    return;
+                }
 
-				var result = JsonRpcMessage.MakeResult(request.Id, new
-				{
-					metadata = metadata,
-					processed = metadata.Count,
-					total = pathStrings.Count
-				});
+                // Check method registry for authorization
+                if (!_methodRegistry.TryGet(request.Method ?? "", out var methodDef))
+                {
+                    if (!request.IsNotification)
+                        await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32601, "Method not found")).ConfigureAwait(false);
+                    return;
+                }
 
-				await _comm.SendResponseAsync(client, result);
-			}
-			catch (OperationCanceledException)
-			{
-				var error = JsonRpcMessage.MakeError(request.Id, -32603, "Request timeout - too many items or slow filesystem");
-				await _comm.SendResponseAsync(client, error);
-			}
-			catch (Exception ex)
-			{
-				_logger.LogError(ex, "Error getting metadata");
-				var error = JsonRpcMessage.MakeError(request.Id, -32603, "Failed to get metadata");
-				await _comm.SendResponseAsync(client, error);
-			}
-		}
+                // Check payload size limit if defined
+                if (methodDef.MaxPayloadBytes.HasValue)
+                {
+                    var payloadSize = System.Text.Encoding.UTF8.GetByteCount(request.ToJson());
+                    if (payloadSize > methodDef.MaxPayloadBytes.Value)
+                    {
+                        if (!request.IsNotification)
+                            await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32602, "Payload too large")).ConfigureAwait(false);
+                        return;
+                    }
+                }
 
-		private async Task HandleNavigateAsync(ClientContext client, JsonRpcMessage request)
-		{
-			if (!request.Params.HasValue || !request.Params.Value.TryGetProperty("path", out var pathElement))
-			{
-				var error = JsonRpcMessage.MakeError(request.Id, -32602, "Invalid params - path required");
-				await _comm.SendResponseAsync(client, error);
-				return;
-			}
+                // Route to specific handlers
+                switch (request.Method)
+                {
+                    case "getState":
+                        await HandleGetState(client, request).ConfigureAwait(false);
+                        break;
 
-			var path = pathElement.GetString();
-			if (string.IsNullOrEmpty(path))
-			{
-				var error = JsonRpcMessage.MakeError(request.Id, -32602, "Invalid params - path cannot be empty");
-				await _comm.SendResponseAsync(client, error);
-				return;
-			}
+                    case "listActions":
+                        await HandleListActions(client, request).ConfigureAwait(false);
+                        break;
 
-			var normalizedPath = NormalizePath(path);
-			if (!IsValidPath(normalizedPath))
-			{
-				var error = JsonRpcMessage.MakeError(request.Id, -32602, "Invalid path - security check failed");
-				await _comm.SendResponseAsync(client, error);
-				return;
-			}
+                    case "executeAction":
+                        await HandleExecuteAction(client, request).ConfigureAwait(false);
+                        break;
 
-			try
-			{
-				await _uiQueue.EnqueueAsync(async () =>
-				{
-					// This would need to be implemented based on the actual ShellViewModel navigation methods
-					// await _shell.NavigateToPathAsync(normalizedPath);
-					_logger.LogInformation("Navigation to {Path} requested (not yet implemented)", normalizedPath);
-				});
+                    case "navigate":
+                        await HandleNavigate(client, request).ConfigureAwait(false);
+                        break;
 
-				var result = JsonRpcMessage.MakeResult(request.Id, new
-				{
-					success = true,
-					navigatedTo = normalizedPath
-				});
+                    case "getMetadata":
+                        await HandleGetMetadata(client, request).ConfigureAwait(false);
+                        break;
 
-				await _comm.SendResponseAsync(client, result);
-			}
-			catch (Exception ex)
-			{
-				_logger.LogError(ex, "Error navigating to {Path}", normalizedPath);
-				var error = JsonRpcMessage.MakeError(request.Id, -32603, "Navigation failed");
-				await _comm.SendResponseAsync(client, error);
-			}
-		}
+                    default:
+                        if (!request.IsNotification)
+                            await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32601, "Method not implemented")).ConfigureAwait(false);
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error handling request from client {ClientId}", client.Id);
+                if (!request.IsNotification)
+                {
+                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32000, "Internal server error")).ConfigureAwait(false);
+                }
+            }
+        }
 
-		private async Task HandleExecuteActionAsync(ClientContext client, JsonRpcMessage request)
-		{
-			if (!request.Params.HasValue || !request.Params.Value.TryGetProperty("actionId", out var actionElement))
-			{
-				var error = JsonRpcMessage.MakeError(request.Id, -32602, "Invalid params - actionId required");
-				await _comm.SendResponseAsync(client, error);
-				return;
-			}
+        private async Task HandleGetState(ClientContext client, JsonRpcMessage request)
+        {
+            try
+            {
+                var state = new
+                {
+                    currentPath = _nav.CurrentPath ?? _shell.WorkingDirectory,
+                    canNavigateBack = _nav.CanGoBack,
+                    canNavigateForward = _nav.CanGoForward,
+                    isLoading = _shell.FilesAndFolders.Count == 0, // Simple loading check
+                    itemCount = _shell.FilesAndFolders.Count
+                };
 
-			var actionId = actionElement.GetString();
-			if (string.IsNullOrEmpty(actionId))
-			{
-				var error = JsonRpcMessage.MakeError(request.Id, -32602, "Invalid params - actionId cannot be empty");
-				await _comm.SendResponseAsync(client, error);
-				return;
-			}
+                if (!request.IsNotification)
+                {
+                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeResult(request.Id, state));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting state");
+                if (!request.IsNotification)
+                {
+                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32000, "Failed to get state"));
+                }
+            }
+        }
 
-			if (!_actions.CanExecute(actionId))
-			{
-				var error = JsonRpcMessage.MakeError(request.Id, -32602, "Action not allowed or not found");
-				await _comm.SendResponseAsync(client, error);
-				return;
-			}
+        private async Task HandleListActions(ClientContext client, JsonRpcMessage request)
+        {
+            try
+            {
+                var actions = _actions.GetAllowedActions().Select(actionId => new
+                {
+                    id = actionId,
+                    name = actionId, // Could be enhanced with proper display names
+                    description = $"Execute {actionId} action"
+                }).ToArray();
 
-			try
-			{
-				// Extract optional context parameter
-				object? context = null;
-				if (request.Params.Value.TryGetProperty("context", out var contextElement))
-				{
-					context = JsonSerializer.Deserialize<object>(contextElement);
-				}
+                if (!request.IsNotification)
+                {
+                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeResult(request.Id, new { actions }));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error listing actions");
+                if (!request.IsNotification)
+                {
+                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32000, "Failed to list actions"));
+                }
+            }
+        }
 
-				await _uiQueue.EnqueueAsync(async () =>
-				{
-					// This would need to be implemented based on the actual action execution system
-					// await _shell.ExecuteActionAsync(actionId, context);
-					_logger.LogInformation("Action {ActionId} execution requested (not yet implemented)", actionId);
-				});
+        private async Task HandleExecuteAction(ClientContext client, JsonRpcMessage request)
+        {
+            try
+            {
+                if (!request.Params.HasValue || !request.Params.Value.TryGetProperty("actionId", out var aidProp))
+                {
+                    if (!request.IsNotification)
+                        await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32602, "Missing actionId"));
+                    return;
+                }
 
-				var result = JsonRpcMessage.MakeResult(request.Id, new
-				{
-					success = true,
-					executedAction = actionId
-				});
+                var actionId = aidProp.GetString();
+                if (string.IsNullOrEmpty(actionId) || !_actions.CanExecute(actionId))
+                {
+                    if (!request.IsNotification)
+                        await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32601, "Action not found or cannot execute"));
+                    return;
+                }
 
-				await _comm.SendResponseAsync(client, result);
-			}
-			catch (Exception ex)
-			{
-				_logger.LogError(ex, "Error executing action {ActionId}", actionId);
-				var error = JsonRpcMessage.MakeError(request.Id, -32603, "Action execution failed");
-				await _comm.SendResponseAsync(client, error);
-			}
-		}
+                // Execute on UI thread
+                await _uiQueue.EnqueueAsync(async () =>
+                {
+                    await ExecuteActionById(actionId);
+                }).ConfigureAwait(false);
 
-		// Private helper methods
-		private static string NormalizePath(string path)
-		{
-			if (string.IsNullOrEmpty(path))
-				return string.Empty;
+                if (!request.IsNotification)
+                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeResult(request.Id, new { status = "ok" }));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error executing action");
+                if (!request.IsNotification)
+                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32000, "Failed to execute action"));
+            }
+        }
 
-			try
-			{
-				// Normalize path separators and resolve relative components
-				var normalized = Path.GetFullPath(path);
-				return normalized;
-			}
-			catch
-			{
-				return path; // Return original if normalization fails
-			}
-		}
+        private async Task HandleNavigate(ClientContext client, JsonRpcMessage request)
+        {
+            try
+            {
+                if (!request.Params.HasValue || !request.Params.Value.TryGetProperty("path", out var pathProp))
+                {
+                    if (!request.IsNotification)
+                        await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32602, "Missing path"));
+                    return;
+                }
 
-		private static bool IsValidPath(string path)
-		{
-			if (string.IsNullOrEmpty(path))
-				return false;
+                var rawPath = pathProp.GetString();
+                if (!TryNormalizePath(rawPath!, out var normalizedPath))
+                {
+                    if (!request.IsNotification)
+                        await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32602, "Invalid path"));
+                    return;
+                }
 
-			try
-			{
-				// Security checks: reject device paths, UNC admin shares, etc.
-				var upper = path.ToUpperInvariant();
+                await _uiQueue.EnqueueAsync(async () =>
+                {
+                    await NavigateToPathNormalized(normalizedPath);
+                }).ConfigureAwait(false);
 
-				// Reject device paths
-				if (upper.StartsWith(@"\\.\", StringComparison.Ordinal) ||
-				    upper.StartsWith(@"\\?\", StringComparison.Ordinal))
-					return false;
+                if (!request.IsNotification)
+                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeResult(request.Id, new { status = "ok" }));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error navigating");
+                if (!request.IsNotification)
+                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32000, "Failed to navigate"));
+            }
+        }
 
-				// Reject admin shares
-				if (upper.StartsWith(@"\\", StringComparison.Ordinal) && upper.Contains(@"\C$", StringComparison.Ordinal))
-					return false;
+        private async Task HandleGetMetadata(ClientContext client, JsonRpcMessage request)
+        {
+            try
+            {
+                if (!request.Params.HasValue || !request.Params.Value.TryGetProperty("paths", out var pathsElem) || pathsElem.ValueKind != JsonValueKind.Array)
+                {
+                    if (!request.IsNotification)
+                        await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32602, "Missing paths array"));
+                    return;
+                }
 
-				// Check for path traversal attempts
-				if (path.Contains("..") || path.Contains("~"))
-					return false;
+                var paths = new List<string>();
+                foreach (var p in pathsElem.EnumerateArray())
+                {
+                    if (p.ValueKind == JsonValueKind.String && paths.Count < IpcConfig.GetMetadataMaxItems)
+                        paths.Add(p.GetString()!);
+                }
 
-				// Must be rooted (absolute path)
-				return Path.IsPathRooted(path);
-			}
-			catch
-			{
-				return false;
-			}
-		}
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(client.Cancellation?.Token ?? CancellationToken.None);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(IpcConfig.GetMetadataTimeoutSec));
 
-		private async Task<List<ItemDto>> GetMetadataForPathsAsync(List<string> paths, CancellationToken cancellationToken)
-		{
-			var results = new List<ItemDto>();
+                var metadata = await Task.Run(() => GetFileMetadata(paths), timeoutCts.Token).ConfigureAwait(false);
 
-			foreach (var path in paths)
-			{
-				cancellationToken.ThrowIfCancellationRequested();
+                if (!request.IsNotification)
+                {
+                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeResult(request.Id, new { items = metadata }));
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("GetMetadata operation timed out for client {ClientId}", client.Id);
+                if (!request.IsNotification)
+                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32000, "Operation timed out"));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting metadata");
+                if (!request.IsNotification)
+                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32000, "Failed to get metadata"));
+            }
+        }
 
-				try
-				{
-					var normalizedPath = NormalizePath(path);
-					if (!IsValidPath(normalizedPath))
-					{
-						results.Add(new ItemDto
-						{
-							Path = path,
-							Name = Path.GetFileName(path),
-							Exists = false
-						});
-						continue;
-					}
+        private List<ItemDto> GetFileMetadata(List<string> paths)
+        {
+            var results = new List<ItemDto>();
+            
+            foreach (var path in paths)
+            {
+                try
+                {
+                    var item = new ItemDto { Path = path, Name = Path.GetFileName(path) };
+                    
+                    if (File.Exists(path))
+                    {
+                        var fi = new FileInfo(path);
+                        item.IsDirectory = false;
+                        item.SizeBytes = fi.Length;
+                        item.DateModified = fi.LastWriteTime.ToString("o");
+                        item.DateCreated = fi.CreationTime.ToString("o");
+                        item.Exists = true;
+                    }
+                    else if (Directory.Exists(path))
+                    {
+                        var di = new DirectoryInfo(path);
+                        item.IsDirectory = true;
+                        item.SizeBytes = 0;
+                        item.DateModified = di.LastWriteTime.ToString("o");
+                        item.DateCreated = di.CreationTime.ToString("o");
+                        item.Exists = true;
+                    }
+                    else
+                    {
+                        item.Exists = false;
+                    }
+                    
+                    results.Add(item);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Error getting metadata for path: {Path}", path);
+                    results.Add(new ItemDto 
+                    { 
+                        Path = path, 
+                        Name = Path.GetFileName(path), 
+                        Exists = false 
+                    });
+                }
+            }
+            
+            return results;
+        }
 
-					// Check if path exists
-					var exists = File.Exists(normalizedPath) || Directory.Exists(normalizedPath);
-					if (!exists)
-					{
-						results.Add(new ItemDto
-						{
-							Path = normalizedPath,
-							Name = Path.GetFileName(normalizedPath),
-							Exists = false
-						});
-						continue;
-					}
+        private async Task ExecuteActionById(string actionId)
+        {
+            _logger.LogInformation("Executing action: {ActionId}", actionId);
+            await Task.CompletedTask;
+        }
 
-					// Get metadata
-					var isDirectory = Directory.Exists(normalizedPath);
-					var info = isDirectory ? (FileSystemInfo)new DirectoryInfo(normalizedPath) : new FileInfo(normalizedPath);
-
-					var item = new ItemDto
-					{
-						Path = normalizedPath,
-						Name = info.Name,
-						IsDirectory = isDirectory,
-						Exists = true,
-						DateCreated = info.CreationTime.ToString("yyyy-MM-ddTHH:mm:ssZ"),
-						DateModified = info.LastWriteTime.ToString("yyyy-MM-ddTHH:mm:ssZ")
-					};
-
-					if (!isDirectory)
-					{
-						var fileInfo = (FileInfo)info;
-						item.SizeBytes = fileInfo.Length;
-						item.MimeType = GetMimeType(normalizedPath);
-					}
-
-					results.Add(item);
-				}
-				catch (Exception ex)
-				{
-					_logger.LogError(ex, "Error getting metadata for path {Path}", path);
-					results.Add(new ItemDto
-					{
-						Path = path,
-						Name = Path.GetFileName(path),
-						Exists = false
-					});
-				}
-			}
-
-			return results;
-		}
-
-		private static string? GetMimeType(string filePath)
-		{
-			var extension = Path.GetExtension(filePath)?.ToLowerInvariant();
-			return extension switch
-			{
-				".txt" => "text/plain",
-				".json" => "application/json",
-				".xml" => "application/xml",
-				".html" => "text/html",
-				".css" => "text/css",
-				".js" => "application/javascript",
-				".pdf" => "application/pdf",
-				".jpg" or ".jpeg" => "image/jpeg",
-				".png" => "image/png",
-				".gif" => "image/gif",
-				".mp4" => "video/mp4",
-				".mp3" => "audio/mpeg",
-				".zip" => "application/zip",
-				_ => "application/octet-stream"
-			};
-		}
-	}
+        private async Task NavigateToPathNormalized(string path)
+        {
+            _logger.LogInformation("Navigating to path: {Path}", path);
+            await _nav.NavigateToAsync(path);
+        }
+    }
 }

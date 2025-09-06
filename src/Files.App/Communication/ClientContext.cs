@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Net.WebSockets;
-using System.Text;
 using System.Threading;
 
 namespace Files.App.Communication
@@ -10,16 +8,12 @@ namespace Files.App.Communication
 	// Per-client state with token-bucket, lossy enqueue and LastSeenUtc tracked.
 	public sealed class ClientContext : IDisposable
 	{
-		// readonly fields
+		// Fields
 		private readonly object _rateLock = new();
 		private readonly ConcurrentQueue<(string payload, bool isNotification, string? method)> _sendQueue = new();
-
-		// Fields
 		private long _queuedBytes = 0;
 		private int _tokens;
 		private DateTime _lastRefill;
-
-		// _disposed field
 		private bool _disposed;
 
 		// Properties  
@@ -85,13 +79,13 @@ namespace Files.App.Communication
 		// Try enqueue with lossy policy; drops oldest notifications of the same method first when needed.
 		public bool TryEnqueue(string payload, bool isNotification, string? method = null)
 		{
-			var bytes = Encoding.UTF8.GetByteCount(payload);
-			var newVal = Interlocked.Add(ref _queuedBytes, bytes);
+			var bytes = System.Text.Encoding.UTF8.GetByteCount(payload);
+			var newVal = System.Threading.Interlocked.Add(ref _queuedBytes, bytes);
 			if (newVal > MaxQueuedBytes)
 			{
 				// attempt to free by dropping oldest notifications (prefer same-method)
 				int freed = 0;
-				var initialQueue = new List<(string payload, bool isNotification, string? method)>();
+				var initialQueue = new System.Collections.Generic.List<(string payload, bool isNotification, string? method)>();
 				while (SendQueue.TryDequeue(out var old))
 				{
 					if (!old.isNotification)
@@ -101,18 +95,18 @@ namespace Files.App.Communication
 					else if (old.method != null && method != null && old.method.Equals(method, StringComparison.OrdinalIgnoreCase) && freed == 0)
 					{
 						// drop one older of same method
-						var b = Encoding.UTF8.GetByteCount(old.payload);
-						Interlocked.Add(ref _queuedBytes, -b);
+						var b = System.Text.Encoding.UTF8.GetByteCount(old.payload);
+						System.Threading.Interlocked.Add(ref _queuedBytes, -b);
 						freed += b;
 						break;
 					}
 					else
 					{
 						// for fairness, try dropping other notifications as well
-						var b = Encoding.UTF8.GetByteCount(old.payload);
-						Interlocked.Add(ref _queuedBytes, -b);
+						var b = System.Text.Encoding.UTF8.GetByteCount(old.payload);
+						System.Threading.Interlocked.Add(ref _queuedBytes, -b);
 						freed += b;
-						if (Interlocked.Read(ref _queuedBytes) <= MaxQueuedBytes) 
+						if (System.Threading.Interlocked.Read(ref _queuedBytes) <= MaxQueuedBytes) 
 							break;
 					}
 				}
@@ -121,7 +115,7 @@ namespace Files.App.Communication
 				foreach (var item in initialQueue) 
 					SendQueue.Enqueue(item);
 
-				newVal = Interlocked.Read(ref _queuedBytes);
+				newVal = System.Threading.Interlocked.Read(ref _queuedBytes);
 				if (newVal + bytes > MaxQueuedBytes)
 				{
 					// still cannot enqueue
@@ -134,7 +128,7 @@ namespace Files.App.Communication
 		}
 
 		// Internal methods
-		internal void DecreaseQueuedBytes(int sentBytes) => Interlocked.Add(ref _queuedBytes, -sentBytes);
+		internal void DecreaseQueuedBytes(int sentBytes) => System.Threading.Interlocked.Add(ref _queuedBytes, -sentBytes);
 
 		// Dispose
 		public void Dispose()

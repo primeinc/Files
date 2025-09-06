@@ -1,6 +1,9 @@
 // Copyright (c) Files Community
 // Licensed under the MIT License.
 
+using Files.App.Communication;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -17,6 +20,7 @@ namespace Files.App.Views.Shells
 			=> ItemDisplayFrame;
 
 		private NavigationInteractionTracker _navigationInteractionTracker;
+		private ShellIpcBootstrapper? _ipcBootstrapper;
 
 		private NavigationParams _NavParams;
 		public NavigationParams NavParams
@@ -52,6 +56,51 @@ namespace Files.App.Views.Shells
 
 			_navigationInteractionTracker = new NavigationInteractionTracker(this, BackIcon, ForwardIcon);
 			_navigationInteractionTracker.NavigationRequested += OverscrollNavigationRequested;
+
+			// Wire up IPC when the page loads
+			Loaded += OnPageLoaded;
+			Unloaded += OnPageUnloaded;
+		}
+
+		private void OnPageLoaded(object sender, RoutedEventArgs e)
+		{
+			try
+			{
+				// Create IPC bootstrapper for this shell
+				var registry = Ioc.Default.GetRequiredService<IIpcShellRegistry>();
+				var commService = Ioc.Default.GetRequiredService<IAppCommunicationService>();
+				var actionRegistry = Ioc.Default.GetRequiredService<ActionRegistry>();
+				var methodRegistry = Ioc.Default.GetRequiredService<RpcMethodRegistry>();
+				var bootstrapLogger = Ioc.Default.GetRequiredService<ILogger<ShellIpcBootstrapper>>();
+				var adapterLogger = Ioc.Default.GetRequiredService<ILogger<ShellIpcAdapter>>();
+
+				// Get the tab ID from the parent TabBarItem if available
+				var tabId = Guid.NewGuid(); // TODO: Get actual tab ID from TabBarItem
+				const uint windowId = 1; // TODO: Get actual window ID
+
+				_ipcBootstrapper = new ShellIpcBootstrapper(
+					registry,
+					this,
+					windowId,
+					tabId,
+					commService,
+					actionRegistry,
+					methodRegistry,
+					DispatcherQueue,
+					bootstrapLogger,
+					adapterLogger);
+			}
+			catch (Exception ex)
+			{
+				App.Logger.LogError(ex, "Failed to initialize IPC for ModernShellPage");
+			}
+		}
+
+		private void OnPageUnloaded(object sender, RoutedEventArgs e)
+		{
+			// Cleanup IPC bootstrapper
+			_ipcBootstrapper?.Dispose();
+			_ipcBootstrapper = null;
 		}
 
 		private async void ShellViewModel_FocusFilterHeader(object sender, EventArgs e)

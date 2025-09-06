@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.Windows.AppLifecycle;
+using Microsoft.Windows.AppNotifications; // Added for AppNotification registration
 using Windows.ApplicationModel;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
@@ -83,6 +84,17 @@ namespace Files.App
 				// Configure the DI (dependency injection) container
 				var host = AppLifecycleHelper.ConfigureHost();
 				Ioc.Default.ConfigureServices(host.Services);
+
+				// Register App Notifications (required for AppNotification toasts to appear)
+				try
+				{
+					AppNotificationManager.Default.Register();
+				}
+				catch (Exception ex)
+				{
+					// Swallow and log if registration fails; toasts just won't appear
+					Ioc.Default.GetRequiredService<ILogger<App>>()?.LogWarning(ex, "AppNotificationManager registration failed");
+				}
 
 				// Configure Sentry
 				if (AppLifecycleHelper.AppEnvironment is not AppEnvironment.Dev)

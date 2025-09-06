@@ -4291,7 +4291,7 @@
   </data>
   <data name="Signatures" xml:space="preserve">
     <value>Signatures</value>
-   </data>
+  </data>
   <data name="SignatureList" xml:space="preserve">
     <value>Signature list</value>
   </data>
@@ -4324,5 +4324,23 @@
   </data>
   <data name="FailedToOpenLogFile" xml:space="preserve">
     <value>Unable to open the log file</value>
+  </data>
+  <data name="RemoteControl" xml:space="preserve">
+    <value>Remote control</value>
+  </data>
+  <data name="EnableRemoteControl" xml:space="preserve">
+    <value>Enable remote control</value>
+  </data>
+  <data name="Token" xml:space="preserve">
+    <value>Token</value>
+  </data>
+  <data name="Rotate" xml:space="preserve">
+    <value>Rotate</value>
+  </data>
+  <data name="RemoteControlHint" xml:space="preserve">
+    <value>Allow external apps to control Files for navigation and actions. Keep the token secret. Disable to stop accepting connections.</value>
+  </data>
+  <data name="TokenCopied" xml:space="preserve">
+    <value>Token copied to clipboard</value>
   </data>
 </root>

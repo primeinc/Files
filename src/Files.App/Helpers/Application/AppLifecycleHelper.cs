@@ -17,6 +17,7 @@ using Windows.ApplicationModel;
 using Windows.Storage;
 using Windows.System;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
+using Files.App.Communication; // Added for IPC service registrations
 
 namespace Files.App.Helpers
 {
@@ -102,6 +103,8 @@ namespace Files.App.Helpers
 			var addItemService = Ioc.Default.GetRequiredService<IAddItemService>();
 			var generalSettingsService = userSettingsService.GeneralSettingsService;
 			var jumpListService = Ioc.Default.GetRequiredService<IWindowsJumpListService>();
+			var ipcService = Ioc.Default.GetRequiredService<IAppCommunicationService>();
+			var ipcCoordinator = Ioc.Default.GetRequiredService<IpcCoordinator>();
 
 			// Start off a list of tasks we need to run before we can continue startup
 			await Task.WhenAll(
@@ -119,7 +122,9 @@ namespace Files.App.Helpers
 					jumpListService.InitializeAsync(),
 					addItemService.InitializeAsync(),
 					ContextMenu.WarmUpQueryContextMenuAsync(),
-					CheckAppUpdate()
+					CheckAppUpdate(),
+					// Initialize IPC service if remote control is enabled
+					OptionalTaskAsync(InitializeIpcAsync(ipcService, ipcCoordinator), Files.App.Communication.ProtectedTokenStore.IsEnabled())
 				);
 			});
 
@@ -134,6 +139,17 @@ namespace Files.App.Helpers
 			}
 
 			generalSettingsService.PropertyChanged += GeneralSettingsService_PropertyChanged;
+		}
+
+		private static async Task InitializeIpcAsync(IAppCommunicationService ipcService, IpcCoordinator ipcCoordinator)
+		{
+			Console.WriteLine("[IPC] Starting IPC service...");
+			await ipcService.StartAsync();
+			Console.WriteLine("[IPC] IPC service started, initializing coordinator...");
+			
+			// Initialize coordinator immediately so it's ready to handle requests
+			ipcCoordinator.Initialize();
+			Console.WriteLine("[IPC] IPC system fully initialized and ready for requests");
 		}
 
 		/// <summary>
@@ -217,6 +233,7 @@ namespace Files.App.Helpers
 					.AddSingleton<ITagsContext, TagsContext>()
 					.AddSingleton<ISidebarContext, SidebarContext>()
 					// Services
+					.AddSingleton(Ioc.Default)
 					.AddSingleton<IWindowsRecentItemsService, WindowsRecentItemsService>()
 					.AddSingleton<IWindowsIniService, WindowsIniService>()
 					.AddSingleton<IWindowsWallpaperService, WindowsWallpaperService>()
@@ -249,6 +266,13 @@ namespace Files.App.Helpers
 					.AddSingleton<IStorageArchiveService, StorageArchiveService>()
 					.AddSingleton<IStorageSecurityService, StorageSecurityService>()
 					.AddSingleton<IWindowsCompatibilityService, WindowsCompatibilityService>()
+					// IPC system
+					.AddSingleton<RpcMethodRegistry>()
+					.AddSingleton<ActionRegistry>()
+					.AddSingleton<IAppCommunicationService, WebSocketAppCommunicationService>()
+					.AddSingleton<IIpcShellRegistry, IpcShellRegistry>()
+					.AddSingleton<IWindowResolver, WindowResolver>()
+					.AddSingleton<IpcCoordinator>()
 					// ViewModels
 					.AddSingleton<MainPageViewModel>()
 					.AddSingleton<InfoPaneViewModel>()

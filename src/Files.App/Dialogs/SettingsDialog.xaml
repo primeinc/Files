@@ -150,6 +150,14 @@
 					</NavigationViewItem.Icon>
 				</NavigationViewItem>
 				<NavigationViewItem
+					AutomationProperties.AutomationId="SettingsItemIpc"
+					Content="{helpers:ResourceString Name=RemoteControl}"
+					Tag="IpcPage">
+					<NavigationViewItem.Icon>
+						<FontIcon Foreground="{ThemeResource App.Theme.IconBaseBrush}" Glyph="&#xE9A1;" />
+					</NavigationViewItem.Icon>
+				</NavigationViewItem>
+				<NavigationViewItem
 					AutomationProperties.AutomationId="SettingsItemAbout"
 					Content="{helpers:ResourceString Name=About}"
 					Tag="AboutPage">

@@ -14,5 +14,6 @@ namespace Files.App.Data.Enums
 		DevToolsPage,
 		AdvancedPage,
 		AboutPage,
+		IpcPage,
 	}
 }
