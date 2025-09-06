@@ -2,11 +2,13 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
 using System.Net;
+using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Windows.Storage;
 
 namespace Files.App.Communication
 {
@@ -23,6 +25,8 @@ namespace Files.App.Communication
         private string? _currentToken;
         private int _currentEpoch;
         private bool _isStarted;
+        private bool _tokenUsed; // single?use token semantics
+        private int? _port;      // dynamically assigned port
 
         public event Func<ClientContext, JsonRpcMessage, Task>? OnRequestReceived;
 
@@ -54,17 +58,25 @@ namespace Files.App.Communication
 
             try
             {
-                _currentToken = await ProtectedTokenStore.GetOrCreateTokenAsync();
-                _currentEpoch = ProtectedTokenStore.GetEpoch();
+                // Generate fresh single?use token (do not reuse persisted store token for rendezvous)
+                _currentToken = EphemeralTokenHelper.GenerateToken();
+                _currentEpoch = ProtectedTokenStore.GetEpoch(); // still reuse epoch concept for responses
+                _tokenUsed = false;
+
+                // Acquire an ephemeral free port atomically
+                _port = EphemeralPortAllocator.GetEphemeralTcpPort();
 
                 _httpListener.Prefixes.Clear();
-                _httpListener.Prefixes.Add("http://127.0.0.1:52345/");
+                _httpListener.Prefixes.Add($"http://127.0.0.1:{_port}/");
                 _httpListener.Start();
                 _isStarted = true;
 
                 _ = Task.Run(AcceptConnectionsAsync, _cancellation.Token);
                 
-                _logger.LogInformation("WebSocket IPC service started on http://127.0.0.1:52345/");
+                _logger.LogInformation("WebSocket IPC service started on http://127.0.0.1:{Port}/", _port);
+
+                // Update rendezvous file (pipe name may be populated later by pipe service)
+                await IpcRendezvousFile.TryUpdateAsync(token: _currentToken, webSocketPort: _port, pipeName: null, epoch: _currentEpoch);
             }
             catch (Exception ex)
             {
@@ -288,6 +300,16 @@ namespace Files.App.Communication
         {
             try
             {
+                if (_tokenUsed)
+                {
+                    if (!message.IsNotification)
+                    {
+                        var usedErr = JsonRpcMessage.MakeError(message.Id, -32004, "Token already used");
+                        await SendResponseAsync(client, usedErr);
+                    }
+                    return;
+                }
+
                 if (message.Params?.TryGetProperty("token", out var tokenProp) != true)
                 {
                     var errorResponse = JsonRpcMessage.MakeError(message.Id, -32602, "Missing token parameter");
@@ -322,6 +344,11 @@ namespace Files.App.Communication
                 }
 
                 _logger.LogInformation("Client {ClientId} authenticated successfully", client.Id);
+
+                // Invalidate token & delete rendezvous file after first successful handshake
+                _tokenUsed = true;
+                _currentToken = null;
+                await IpcRendezvousFile.TryDeleteAsync();
             }
             catch (Exception ex)
             {
