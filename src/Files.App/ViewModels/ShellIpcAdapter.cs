@@ -16,6 +16,101 @@ namespace Files.App.ViewModels
     // Adapter with strict allowlist, path normalization, selection cap and structured errors.
     public sealed class ShellIpcAdapter
     {
+        // Public methods for IpcCoordinator to call
+        public async Task<object> GetStateAsync()
+        {
+            // Must run on UI thread to access Frame properties
+            var tcs = new TaskCompletionSource<object>();
+            
+            await _uiQueue.EnqueueAsync(async () =>
+            {
+                try
+                {
+                    var state = new
+                    {
+                        currentPath = _nav.CurrentPath ?? _shell.WorkingDirectory,
+                        canNavigateBack = _nav.CanGoBack,
+                        canNavigateForward = _nav.CanGoForward,
+                        isLoading = _shell.FilesAndFolders.Count == 0,
+                        itemCount = _shell.FilesAndFolders.Count
+                    };
+                    tcs.SetResult(state);
+                }
+                catch (Exception ex)
+                {
+                    tcs.SetException(ex);
+                }
+                await Task.CompletedTask;
+            }).ConfigureAwait(false);
+            
+            return await tcs.Task.ConfigureAwait(false);
+        }
+
+        public async Task<object> ListActionsAsync()
+        {
+            var tcs = new TaskCompletionSource<object>();
+            
+            await _uiQueue.EnqueueAsync(async () =>
+            {
+                try
+                {
+                    var actions = _actions.GetAllowedActions().Select(actionId => new
+                    {
+                        id = actionId,
+                        name = actionId,
+                        description = $"Execute {actionId} action"
+                    }).ToArray();
+                    tcs.SetResult(new { actions });
+                }
+                catch (Exception ex)
+                {
+                    tcs.SetException(ex);
+                }
+                await Task.CompletedTask;
+            }).ConfigureAwait(false);
+            
+            return await tcs.Task.ConfigureAwait(false);
+        }
+
+        public async Task<object> NavigateAsync(string path)
+        {
+            if (!TryNormalizePath(path, out var normalizedPath))
+            {
+                throw new ArgumentException("Invalid path");
+            }
+
+            await _uiQueue.EnqueueAsync(async () =>
+            {
+                await NavigateToPathNormalized(normalizedPath);
+            }).ConfigureAwait(false);
+
+            return new { status = "ok" };
+        }
+
+        public async Task<object> GetMetadataAsync(List<string> paths)
+        {
+            // GetFileMetadata uses file system, doesn't need UI thread
+            return await Task.Run(() =>
+            {
+                var metadata = GetFileMetadata(paths);
+                return new { items = metadata };
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<object> ExecuteActionAsync(string actionId)
+        {
+            if (string.IsNullOrEmpty(actionId) || !_actions.CanExecute(actionId))
+            {
+                throw new ArgumentException("Action not found or cannot execute");
+            }
+
+            await _uiQueue.EnqueueAsync(async () =>
+            {
+                await ExecuteActionById(actionId);
+            }).ConfigureAwait(false);
+
+            return new { status = "ok" };
+        }
         private readonly ShellViewModel _shell;
         private readonly IAppCommunicationService _comm;
         private readonly ActionRegistry _actions;
@@ -44,7 +139,8 @@ namespace Files.App.ViewModels
             _nav = nav ?? throw new ArgumentNullException(nameof(nav));
             _uiQueue = new UIOperationQueue(dispatcher ?? throw new ArgumentNullException(nameof(dispatcher)));
 
-            _comm.OnRequestReceived += HandleRequestAsync;
+            // Don't subscribe here - IpcCoordinator routes to us
+            // _comm.OnRequestReceived += HandleRequestAsync;
 
             _shell.WorkingDirectoryModified += Shell_WorkingDirectoryModified;
             _nav.StateChanged += Nav_StateChanged;
@@ -269,7 +365,7 @@ namespace Files.App.ViewModels
         {
             try
             {
-                if (request.Params is null || !request.Params.Value.TryGetProperty("actionId", out var aidProp))
+                if (!request.Params.HasValue || !request.Params.Value.TryGetProperty("actionId", out var aidProp))
                 {
                     if (!request.IsNotification)
                         await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32602, "Missing actionId"));
@@ -305,7 +401,7 @@ namespace Files.App.ViewModels
         {
             try
             {
-                if (request.Params is null || !request.Params.Value.TryGetProperty("path", out var pathProp))
+                if (!request.Params.HasValue || !request.Params.Value.TryGetProperty("path", out var pathProp))
                 {
                     if (!request.IsNotification)
                         await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32602, "Missing path"));
@@ -340,7 +436,7 @@ namespace Files.App.ViewModels
         {
             try
             {
-                if (request.Params is null || !request.Params.Value.TryGetProperty("paths", out var pathsElem) || pathsElem.ValueKind != JsonValueKind.Array)
+                if (!request.Params.HasValue || !request.Params.Value.TryGetProperty("paths", out var pathsElem) || pathsElem.ValueKind != JsonValueKind.Array)
                 {
                     if (!request.IsNotification)
                         await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, -32602, "Missing paths array"));
