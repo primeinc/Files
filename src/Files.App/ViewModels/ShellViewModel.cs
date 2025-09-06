@@ -1631,6 +1631,16 @@ namespace Files.App.ViewModels
 			if (string.IsNullOrEmpty(path))
 				return;
 
+			// Quick validation to prevent hanging on invalid paths
+			if (!path.StartsWith(@"\\SHELL\", StringComparison.Ordinal) && // Shell folders are virtual
+			    !path.StartsWith(@"\\?\", StringComparison.Ordinal) && // MTP devices
+			    !Directory.Exists(path))
+			{
+				Debug.WriteLine($"Skipping enumeration of non-existent path: {path}");
+				IsLoadingItems = false;
+				return;
+			}
+
 			var stopwatch = new Stopwatch();
 			stopwatch.Start();
 

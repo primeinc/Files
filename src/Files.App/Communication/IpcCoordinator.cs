@@ -92,8 +92,22 @@ namespace Files.App.Communication
                 
                 if (!request.IsNotification)
                 {
-                    // Include the actual exception details in the error message for debugging
-                    var errorMessage = $"Exception: {ex.GetType().Name}: {ex.Message}. StackTrace: {ex.StackTrace?.Replace("\r\n", " ").Replace("\n", " ").Substring(0, Math.Min(ex.StackTrace?.Length ?? 0, 500))}";
+                    string sanitizedStack = string.Empty;
+                    try
+                    {
+                        if (!string.IsNullOrEmpty(ex.StackTrace))
+                        {
+                            sanitizedStack = ex.StackTrace.Replace("\r\n", " ").Replace("\n", " ");
+                            if (sanitizedStack.Length > 500)
+                                sanitizedStack = sanitizedStack.Substring(0, 500);
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore any failure during sanitization
+                    }
+
+                    var errorMessage = $"Exception: {ex.GetType().Name}: {ex.Message}. StackTrace: {sanitizedStack}";
                     await _comm.SendResponseAsync(client, 
                         JsonRpcMessage.MakeError(request.Id, JsonRpcException.InternalError, errorMessage));
                 }

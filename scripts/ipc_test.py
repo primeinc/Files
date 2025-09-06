@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """
-Basic Python test client for Files App IPC (WebSocket JSON-RPC).
+Comprehensive IPC test suite for Files App (WebSocket JSON-RPC).
 
 Usage:
-  python scripts/ipc_test.py --token <TOKEN> [--navigate <PATH>] [--duration <SECONDS>]
+  python scripts/ipc_test.py --token <TOKEN> [--test <TEST_NAME>] [--navigate <PATH>] [--duration <SECONDS>]
+
+Tests available:
+  - basic: Basic connection and handshake
+  - multi: Multiple operations and rapid navigation
+  - edge: Edge cases and error handling
+  - pathfix: Test the invalid path fix (50-second hang bug)
+  - all: Run all tests
 
 Notes:
-- Ensure Remote control is enabled in Files (Settings > Advanced > Remote control) so the IPC service is running.
-- Copy the token from the same settings page and pass it with --token.
+- Ensure Remote control is enabled in Files (Settings > Advanced > Remote control)
+- Copy the token from settings page and pass it with --token
 - Requires: pip install websockets
 """
 
@@ -15,8 +22,8 @@ import argparse
 import asyncio
 import json
 import os
-import signal
 import sys
+import time
 from typing import Any, Dict, Optional
 
 import websockets
@@ -84,7 +91,185 @@ class JsonRpcClient:
         return resp.get("result")
 
 
-async def run(token: str, navigate_path: Optional[str], duration: int):
+async def test_basic(client: JsonRpcClient):
+    """Test basic functionality"""
+    print("\n=== BASIC TEST ===")
+    
+    print("Calling getState ...")
+    state = await client.call("getState")
+    print(f"State: {json.dumps(state, indent=2)}")
+
+    print("Calling listActions ...")
+    actions = await client.call("listActions")
+    print(f"Actions: {json.dumps(actions, indent=2)}")
+
+    sample_paths = []
+    userprofile = os.environ.get("USERPROFILE")
+    if userprofile:
+        sample_paths.append(userprofile)
+    sample_paths.append(os.path.expanduser("~"))
+    sample_paths.append("C:/")
+    sample_paths = list(dict.fromkeys(sample_paths))  # dedupe
+
+    print("Calling getMetadata ...")
+    metadata = await client.call("getMetadata", {"paths": sample_paths})
+    print(f"Metadata: {json.dumps(metadata, indent=2)}")
+
+
+async def test_multi(client: JsonRpcClient):
+    """Test multiple operations"""
+    print("\n=== MULTI-OPERATION TEST ===")
+    
+    # Test executeAction - refresh
+    print("Testing executeAction: refresh")
+    try:
+        result = await client.call("executeAction", {"actionId": "refresh"})
+        print(f"Refresh result: {result}")
+    except Exception as e:
+        print(f"Refresh error: {e}")
+    
+    # Navigate to different locations quickly
+    print("\nTesting rapid navigation:")
+    paths = [
+        "C:\\Windows",
+        "C:\\Program Files",
+        "C:\\Users",
+        os.path.expanduser("~/Documents")
+    ]
+    
+    for path in paths:
+        print(f"Navigating to: {path}")
+        try:
+            result = await client.call("navigate", {"path": path})
+            print(f"  Result: {result.get('status')}")
+        except Exception as e:
+            print(f"  Error: {e}")
+        await asyncio.sleep(0.5)
+    
+    # Get final state
+    print("\nFinal state:")
+    state = await client.call("getState")
+    print(f"Current path: {state.get('currentPath')}")
+    print(f"Can go back: {state.get('canNavigateBack')}")
+    print(f"Can go forward: {state.get('canNavigateForward')}")
+    print(f"Item count: {state.get('itemCount')}")
+
+
+async def test_edge_cases(client: JsonRpcClient):
+    """Test edge cases and error handling"""
+    print("\n=== EDGE CASES TEST ===")
+    
+    # Test 1: Invalid path navigation
+    print("Test 1: Navigate to invalid path")
+    try:
+        result = await client.call("navigate", {"path": "Z:\\NonExistent\\Path\\That\\Does\\Not\\Exist"})
+        print(f"Result: {result}")
+    except Exception as e:
+        print(f"Error (expected): {e}")
+    
+    # Test 2: Invalid action
+    print("\nTest 2: Execute invalid action")
+    try:
+        result = await client.call("executeAction", {"actionId": "thisActionDoesNotExist"})
+        print(f"Result: {result}")
+    except Exception as e:
+        print(f"Error (expected): {e}")
+    
+    # Test 3: Missing parameters
+    print("\nTest 3: Navigate without path")
+    try:
+        result = await client.call("navigate", {})
+        print(f"Result: {result}")
+    except Exception as e:
+        print(f"Error (expected): {e}")
+    
+    # Test 4: Invalid method
+    print("\nTest 4: Call non-existent method")
+    try:
+        result = await client.call("thisMethodDoesNotExist", {})
+        print(f"Result: {result}")
+    except Exception as e:
+        print(f"Error (expected): {e}")
+    
+    # Test 5: Very long path
+    print("\nTest 5: Navigate with extremely long path")
+    long_path = "C:\\" + "\\VeryLongFolderName" * 100
+    try:
+        result = await client.call("navigate", {"path": long_path})
+        print(f"Result: {result}")
+    except Exception as e:
+        print(f"Error (expected): {e}")
+    
+    # Test 6: Verify system still responsive
+    print("\nTest 6: Verify system still responsive")
+    state = await client.call("getState")
+    print(f"Current path: {state.get('currentPath')}")
+    print(f"System is {'responsive' if state else 'not responsive'}")
+
+
+async def test_pathfix(client: JsonRpcClient):
+    """Test the fix for 50-second hang on invalid paths"""
+    print("\n=== PATH VALIDATION FIX TEST ===")
+    print("This tests the fix for the 50-second hang on invalid paths")
+    
+    # Test 1: Non-existent normal path
+    print("\nTest 1: Non-existent normal path (should fail quickly)")
+    start = time.time()
+    try:
+        result = await client.call("navigate", {"path": "C:\\ThisPathDoesNotExist\\SubFolder"})
+        print(f"Result: {result}")
+    except Exception as e:
+        print(f"Error: {e}")
+    elapsed = time.time() - start
+    print(f"Time taken: {elapsed:.2f} seconds")
+    if elapsed > 5:
+        print("WARNING: Took too long! Path validation might not be working.")
+    else:
+        print("GOOD: Failed quickly as expected")
+    
+    # Test 2: Extremely long non-existent path (the 50-second hang case)
+    print("\nTest 2: Extremely long path (should fail quickly, not hang for 50s)")
+    long_path = "C:\\" + "\\VeryLongFolderName" * 200  # Create a path >32k chars
+    print(f"Path length: {len(long_path)} characters")
+    start = time.time()
+    try:
+        result = await client.call("navigate", {"path": long_path})
+        print(f"Result: {result}")
+    except Exception as e:
+        print(f"Error: {e}")
+    elapsed = time.time() - start
+    print(f"Time taken: {elapsed:.2f} seconds")
+    if elapsed > 5:
+        print("FAILED: Path validation fix not working! Still hanging on invalid paths.")
+    else:
+        print("SUCCESS: Path validation fix is working! No more 50-second hangs.")
+    
+    # Test 3: Valid path (should work normally)
+    print("\nTest 3: Valid path (should work normally)")
+    start = time.time()
+    try:
+        result = await client.call("navigate", {"path": "C:\\Windows"})
+        print(f"Result: {result}")
+    except Exception as e:
+        print(f"Error: {e}")
+    elapsed = time.time() - start
+    print(f"Time taken: {elapsed:.2f} seconds")
+    
+    # Test 4: Network path (might timeout legitimately)
+    print("\nTest 4: Network path (might timeout - that's OK for network)")
+    start = time.time()
+    try:
+        result = await client.call("navigate", {"path": "\\\\NonExistentServer\\Share"})
+        print(f"Result: {result}")
+    except Exception as e:
+        print(f"Error: {e}")
+    elapsed = time.time() - start
+    print(f"Time taken: {elapsed:.2f} seconds")
+    if elapsed > 10:
+        print("Note: Network paths may timeout - that's expected behavior")
+
+
+async def run(token: str, test_name: str, navigate_path: Optional[str], duration: int):
     print(f"Connecting to {WS_URL} ...")
     async with websockets.connect(WS_URL, max_size=8 * 1024 * 1024) as ws:
         client = JsonRpcClient(ws)
@@ -101,53 +286,51 @@ async def run(token: str, navigate_path: Optional[str], duration: int):
 
         print(f"Handshake OK: {result}")
 
-        print("Calling getState ...")
-        state = await client.call("getState")
-        print(f"State: {json.dumps(state, indent=2)}")
-
-        print("Calling listActions ...")
-        actions = await client.call("listActions")
-        print(f"Actions: {json.dumps(actions, indent=2)}")
-
-        sample_paths = []
-        userprofile = os.environ.get("USERPROFILE")
-        if userprofile:
-            sample_paths.append(userprofile)
-        sample_paths.append(os.path.expanduser("~"))
-        sample_paths.append("C:/")
-        sample_paths = list(dict.fromkeys(sample_paths))  # dedupe, keep order
-
-        print("Calling getMetadata ...")
-        metadata = await client.call("getMetadata", {"paths": sample_paths})
-        print(f"Metadata: {json.dumps(metadata, indent=2)}")
-
+        # Run requested tests
+        if test_name in ["basic", "all"]:
+            await test_basic(client)
+        
+        if test_name in ["multi", "all"]:
+            await test_multi(client)
+        
+        if test_name in ["edge", "all"]:
+            await test_edge_cases(client)
+        
+        if test_name in ["pathfix", "all"]:
+            await test_pathfix(client)
+        
+        # Optional navigation
         if navigate_path:
-            print(f"Calling navigate to: {navigate_path}")
+            print(f"\nNavigating to: {navigate_path}")
             try:
                 nav = await client.call("navigate", {"path": navigate_path})
                 print(f"Navigate result: {json.dumps(nav, indent=2)}")
             except Exception as ex:
                 print(f"Navigate failed: {ex}")
 
-        print(f"Listening for notifications for {duration} seconds (press Ctrl+C to exit early)...")
-        try:
-            await asyncio.sleep(duration)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            await client.stop()
+        # Listen for notifications
+        if duration > 0:
+            print(f"\nListening for notifications for {duration} seconds (press Ctrl+C to exit)...")
+            try:
+                await asyncio.sleep(duration)
+            except asyncio.CancelledError:
+                pass
+        
+        await client.stop()
 
 
 def main():
     parser = argparse.ArgumentParser(description="Files App IPC WebSocket test client")
     parser.add_argument("--token", required=True, help="Authentication token from Files settings")
-    parser.add_argument("--navigate", help="Optional path to navigate to (e.g., C:/)")
-    parser.add_argument("--duration", type=int, default=10, help="Time in seconds to listen for notifications")
+    parser.add_argument("--test", choices=["basic", "multi", "edge", "pathfix", "all"], 
+                       default="basic", help="Which test to run")
+    parser.add_argument("--navigate", help="Optional path to navigate to")
+    parser.add_argument("--duration", type=int, default=0, 
+                       help="Time in seconds to listen for notifications after tests")
     args = parser.parse_args()
 
-    # Use asyncio.run() for better Windows compatibility
     try:
-        asyncio.run(run(args.token, args.navigate, args.duration))
+        asyncio.run(run(args.token, args.test, args.navigate, args.duration))
     except KeyboardInterrupt:
         print("\nInterrupted by user")
         return 0

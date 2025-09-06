@@ -344,36 +344,72 @@ namespace Files.App.Helpers
 
 			if (ex is not null)
 			{
-				ex.Data[Mechanism.HandledKey] = false;
-				ex.Data[Mechanism.MechanismKey] = "Application.UnhandledException";
+				try
+				{
+					// Mark as unhandled for Sentry
+					ex.Data[Mechanism.HandledKey] = false;
+					ex.Data[Mechanism.MechanismKey] = "Application.UnhandledException";
+				}
+				catch { /* ignore metadata failures */ }
 
+				// Capture with highest severity
 				SentrySdk.CaptureException(ex, scope =>
 				{
 					scope.User.Id = generalSettingsService?.UserId;
 					scope.Level = SentryLevel.Fatal;
 				});
 
+				Exception primary = ex;
+				// Flatten aggregate exceptions so we log all inner exceptions
+				List<Exception> all = new();
+				if (ex is AggregateException aggr)
+				{
+					var flat = aggr.Flatten();
+					primary = flat.InnerExceptions.FirstOrDefault() ?? aggr;
+					all.AddRange(flat.InnerExceptions);
+				}
+				else
+				{
+					all.Add(primary);
+				}
+
 				formattedException.AppendLine($">>>> HRESULT: {ex.HResult}");
 
-				if (ex.Message is not null)
+				if (!string.IsNullOrWhiteSpace(primary.Message))
 				{
 					formattedException.AppendLine("--- MESSAGE ---");
-					formattedException.AppendLine(ex.Message);
+					formattedException.AppendLine(primary.Message);
 				}
-				if (ex.StackTrace is not null)
+
+				if (!string.IsNullOrWhiteSpace(primary.StackTrace))
 				{
 					formattedException.AppendLine("--- STACKTRACE ---");
-					formattedException.AppendLine(ex.StackTrace);
+					formattedException.AppendLine(primary.StackTrace);
 				}
-				if (ex.Source is not null)
+
+				if (!string.IsNullOrWhiteSpace(primary.Source))
 				{
 					formattedException.AppendLine("--- SOURCE ---");
-					formattedException.AppendLine(ex.Source);
+					formattedException.AppendLine(primary.Source);
 				}
-				if (ex.InnerException is not null)
+
+				// Log all inner/aggregate exceptions (excluding the primary already logged above)
+				if (all.Count > 1 || primary.InnerException is not null)
 				{
-					formattedException.AppendLine("--- INNER ---");
-					formattedException.AppendLine(ex.InnerException.ToString());
+					formattedException.AppendLine("--- INNER EXCEPTIONS ---");
+					int idx = 0;
+					foreach (var inner in all)
+					{
+						if (ReferenceEquals(inner, primary))
+							continue;
+						formattedException.AppendLine($"[{idx++}] {inner.GetType().FullName}: {inner.Message}");
+						if (!string.IsNullOrWhiteSpace(inner.StackTrace))
+							formattedException.AppendLine(inner.StackTrace);
+					}
+					if (primary.InnerException is not null && !all.Contains(primary.InnerException))
+					{
+						formattedException.AppendLine($"[Inner] {primary.InnerException}");
+					}
 				}
 			}
 			else
@@ -385,43 +421,61 @@ namespace Files.App.Helpers
 
 			Debug.WriteLine(formattedException.ToString());
 
-			// Please check "Output Window" for exception details (View -> Output Window) (CTRL + ALT + O)
-			Debugger.Break();
+			// Only break if a debugger is attached to avoid prompting end users.
+			if (Debugger.IsAttached)
+				Debugger.Break();
 
-			// Save the current tab list in case it was overwriten by another instance
+			// Save the current tab list in case it was overwritten by another instance
 			SaveSessionTabs();
 			App.Logger?.LogError(ex, ex?.Message ?? "An unhandled error occurred.");
 
-			if (!showToastNotification)
-				return;
-
-			SafetyExtensions.IgnoreExceptions(() =>
+			// Show toast if requested but do not short‑circuit restart logic.
+			if (showToastNotification)
 			{
-				AppToastNotificationHelper.ShowUnhandledExceptionToast();
-			});
-
-			// Restart the app
-			var userSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
-			var lastSessionTabList = userSettingsService.GeneralSettingsService.LastSessionTabList;
-
-			if (userSettingsService.GeneralSettingsService.LastCrashedTabList?.SequenceEqual(lastSessionTabList) ?? false)
-			{
-				// Avoid infinite restart loop
-				userSettingsService.GeneralSettingsService.LastSessionTabList = null;
-			}
-			else
-			{
-				userSettingsService.AppSettingsService.RestoreTabsOnStartup = true;
-				userSettingsService.GeneralSettingsService.LastCrashedTabList = lastSessionTabList;
-
-				// Try to re-launch and start over
-				MainWindow.Instance.DispatcherQueue.EnqueueOrInvokeAsync(async () =>
+				SafetyExtensions.IgnoreExceptions(() =>
 				{
-					await Launcher.LaunchUriAsync(new Uri("files-dev:"));
-				})
-				.Wait(100);
+					AppToastNotificationHelper.ShowUnhandledExceptionToast();
+				});
 			}
-			Process.GetCurrentProcess().Kill();
+
+			// Restart the app attempting to restore tabs (unless we detect a crash loop)
+			try
+			{
+				var userSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
+				var lastSessionTabList = userSettingsService.GeneralSettingsService.LastSessionTabList;
+
+				if (userSettingsService.GeneralSettingsService.LastCrashedTabList?.SequenceEqual(lastSessionTabList) ?? false)
+				{
+					// Avoid infinite restart loop
+					userSettingsService.GeneralSettingsService.LastSessionTabList = null;
+				}
+				else
+				{
+					userSettingsService.AppSettingsService.RestoreTabsOnStartup = true;
+					userSettingsService.GeneralSettingsService.LastCrashedTabList = lastSessionTabList;
+
+					// Try to re-launch and start over (best effort, do not await indefinitely)
+					MainWindow.Instance.DispatcherQueue.EnqueueOrInvokeAsync(async () =>
+					{
+						try
+						{
+							await Launcher.LaunchUriAsync(new Uri("files-dev:"));
+						}
+						catch { }
+					})
+					.Wait(100);
+				}
+			}
+			catch (Exception restartEx)
+			{
+				App.Logger?.LogError(restartEx, "Failed while attempting auto-restart after unhandled exception.");
+			}
+			finally
+			{
+				// Give Sentry a brief moment to flush events (best effort, non-blocking long)
+				try { SentrySdk.FlushAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult(); } catch { }
+				Process.GetCurrentProcess().Kill();
+			}
 		}
 
 		/// <summary>
