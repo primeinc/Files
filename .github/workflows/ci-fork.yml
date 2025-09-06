@@ -1,0 +1,112 @@
+# Simplified CI for Fork
+# This workflow runs basic build validation without requiring secrets
+
+name: Fork CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'feature/*'
+      - 'fix/*'
+    paths-ignore:
+      - 'assets/**'
+      - 'builds/**'
+      - 'docs/**'
+      - '*.md'
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - 'assets/**'
+      - 'builds/**'
+      - 'docs/**'
+      - '*.md'
+
+env:
+  SOLUTION_PATH: '${{ github.workspace }}\Files.slnx'
+  PACKAGE_PROJECT_PATH: '${{ github.workspace }}\src\Files.App (Package)\Files.Package.wapproj'
+  APPX_PACKAGE_DIR: '${{ github.workspace }}\artifacts\AppxPackages'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    strategy:
+      matrix:
+        configuration: [Debug, Release]
+        platform: [x64]
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+      with:
+        vs-version: '[17.0,)'
+
+    - name: Restore NuGet
+      run: |
+        dotnet restore $env:SOLUTION_PATH
+
+    - name: Build Solution
+      run: |
+        msbuild $env:SOLUTION_PATH `
+          /p:Configuration=${{ matrix.configuration }} `
+          /p:Platform=${{ matrix.platform }} `
+          /p:AppxPackageDir=$env:APPX_PACKAGE_DIR `
+          /p:AppxBundle=Never `
+          /p:AppxPackageSigningEnabled=false `
+          /p:GenerateAppxPackageOnBuild=false
+
+    - name: Run Tests
+      run: |
+        dotnet test `
+          --configuration ${{ matrix.configuration }} `
+          --no-build `
+          --logger "console;verbosity=detailed" `
+          tests/Files.App.UITests/Files.App.UITests.csproj
+      continue-on-error: true
+
+    - name: Upload Build Artifacts
+      if: matrix.configuration == 'Release'
+      uses: actions/upload-artifact@v4
+      with:
+        name: Files-${{ matrix.platform }}-${{ matrix.configuration }}
+        path: |
+          src\Files.App\bin\${{ matrix.platform }}\${{ matrix.configuration }}\**\*
+          !**\*.pdb
+          !**\*.xml
+        retention-days: 7
+
+  code-quality:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Check Format
+      run: |
+        dotnet format --verify-no-changes --verbosity diagnostic
+      continue-on-error: true
+
+    - name: Run Code Analysis
+      run: |
+        dotnet build $env:SOLUTION_PATH `
+          /p:RunAnalyzersDuringBuild=true `
+          /p:Configuration=Release `
+          /p:Platform=x64 `
+          /p:TreatWarningsAsErrors=false
+      continue-on-error: true

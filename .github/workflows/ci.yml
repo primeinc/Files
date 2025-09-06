@@ -19,6 +19,8 @@ on:
       - 'docs/**'
       - '*.md'
   pull_request:
+    branches:
+      - main
     paths-ignore:
       - 'assets/**'
       - 'builds/**'
@@ -47,7 +49,7 @@ jobs:
 
   check-formatting:
 
-    if: github.repository_owner == 'files-community'
+    if: github.repository_owner == 'files-community' || github.repository_owner == 'primeinc'
 
     runs-on: windows-latest
 
@@ -83,7 +85,7 @@ jobs:
 
   build:
 
-    if: github.repository_owner == 'files-community'
+    if: github.repository_owner == 'files-community' || github.repository_owner == 'primeinc'
 
     runs-on: windows-latest
     strategy:
@@ -178,7 +180,7 @@ jobs:
 
   test:
 
-    if: github.repository_owner == 'files-community' && always()
+    if: github.repository_owner == 'files-community' || github.repository_owner == 'primeinc' && always()
 
     needs: [build]
     runs-on: windows-latest
