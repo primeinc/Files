@@ -4,7 +4,6 @@ using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Files.App.Communication;
-using Windows.Storage;
 
 namespace Files.InteractionTests.Ipc
 {
@@ -24,32 +23,27 @@ namespace Files.InteractionTests.Ipc
         }
 
         [TestMethod]
-        public void EphemeralTokenHelper_GeneratesUniqueTokens()
+        public void EphemeralTokenHelper_GeneratesStableToken()
         {
-            var t1 = EphemeralTokenHelper.GenerateToken();
-            var t2 = EphemeralTokenHelper.GenerateToken();
-            Assert.IsFalse(string.IsNullOrWhiteSpace(t1));
-            Assert.IsFalse(string.IsNullOrWhiteSpace(t2));
-            Assert.AreNotEqual(t1, t2);
+            var t1 = IpcRendezvousFile.GetOrCreateToken();
+            var t2 = IpcRendezvousFile.GetOrCreateToken();
+            Assert.AreEqual(t1, t2); // now stable across calls in same session
+            Assert.IsTrue(t1.Length >= 40);
         }
 
         [TestMethod]
-        public async Task RendezvousFile_CreatesAndDeletes()
+        public async Task RendezvousFile_UpdateAndMerge()
         {
-            // Write
-            await IpcRendezvousFile.TryUpdateAsync("test-token", 12345, "pipe-test", 1);
-            var localPath = ApplicationData.Current.LocalFolder.Path;
-            var filePath = Path.Combine(localPath, "ipc.info");
-            Assert.IsTrue(File.Exists(filePath));
+            await IpcRendezvousFile.UpdateAsync(webSocketPort: 11111, epoch: 1);
+            await IpcRendezvousFile.UpdateAsync(pipeName: "pipe-xyz", epoch: 1);
 
-            var json = await File.ReadAllTextAsync(filePath);
+            var path = IpcRendezvousFile.GetCurrentPath();
+            Assert.IsTrue(File.Exists(path));
+            var json = await File.ReadAllTextAsync(path);
             using var doc = JsonDocument.Parse(json);
-            Assert.AreEqual(12345, doc.RootElement.GetProperty("webSocketPort").GetInt32());
-            Assert.AreEqual("pipe-test", doc.RootElement.GetProperty("pipeName").GetString());
-
-            // Delete
-            await IpcRendezvousFile.TryDeleteAsync();
-            Assert.IsFalse(File.Exists(filePath));
+            Assert.AreEqual(11111, doc.RootElement.GetProperty("webSocketPort").GetInt32());
+            Assert.AreEqual("pipe-xyz", doc.RootElement.GetProperty("pipeName").GetString());
+            Assert.IsFalse(string.IsNullOrWhiteSpace(doc.RootElement.GetProperty("token").GetString()));
         }
     }
 }

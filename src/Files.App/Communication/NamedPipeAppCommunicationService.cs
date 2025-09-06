@@ -59,12 +59,11 @@ namespace Files.App.Communication
 
             try
             {
-                // fresh ephemeral token for rendezvous
-                _currentToken = EphemeralTokenHelper.GenerateToken();
+                // shared token across transports
+                _currentToken = IpcRendezvousFile.GetOrCreateToken();
                 _currentEpoch = ProtectedTokenStore.GetEpoch();
-                _tokenUsed = false;
+                _tokenUsed = false; // retained but not used to block new clients
                 
-                // Generate pipe name (always new GUID for rendezvous)
                 _pipeName = $"FilesAppPipe_{Environment.UserName}_{Guid.NewGuid():N}";
 
                 _isStarted = true;
@@ -72,8 +71,7 @@ namespace Files.App.Communication
                 
                 _logger.LogInformation("Named Pipe IPC service started with pipe: {PipeName}", _pipeName);
 
-                // Update rendezvous file (websocket portion may already exist; merge behavior done in helper by overwrite)
-                await IpcRendezvousFile.TryUpdateAsync(token: _currentToken, webSocketPort: null, pipeName: _pipeName, epoch: _currentEpoch);
+                await IpcRendezvousFile.UpdateAsync(pipeName: _pipeName, epoch: _currentEpoch);
             }
             catch (Exception ex)
             {
@@ -253,15 +251,6 @@ namespace Files.App.Communication
 
         private async Task HandleHandshakeAsync(ClientContext client, JsonRpcMessage message, BinaryWriter writer)
         {
-            if (_tokenUsed)
-            {
-                if (!message.IsNotification)
-                {
-                    await WriteResponseAsync(writer, JsonRpcMessage.MakeError(message.Id, -32004, "Token already used"));
-                }
-                return;
-            }
-
             if (message.Params?.TryGetProperty("token", out var tokenProp) != true)
             {
                 await WriteResponseAsync(writer, JsonRpcMessage.MakeError(message.Id, -32602, "Missing token parameter"));
@@ -276,9 +265,6 @@ namespace Files.App.Communication
 
             client.IsAuthenticated = true;
             client.AuthEpoch = _currentEpoch;
-            _tokenUsed = true;
-            _currentToken = null;
-            await IpcRendezvousFile.TryDeleteAsync();
 
             if (!message.IsNotification)
             {

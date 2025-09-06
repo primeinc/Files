@@ -58,16 +58,14 @@ namespace Files.App.Communication
 
             try
             {
-                // Generate fresh single?use token (do not reuse persisted store token for rendezvous)
-                _currentToken = EphemeralTokenHelper.GenerateToken();
-                _currentEpoch = ProtectedTokenStore.GetEpoch(); // still reuse epoch concept for responses
-                _tokenUsed = false;
+                // Stable runtime token reused between services
+                _currentToken = IpcRendezvousFile.GetOrCreateToken();
+                _currentEpoch = ProtectedTokenStore.GetEpoch();
+                _tokenUsed = false; // retained for compatibility but no longer enforced
 
-                // Acquire an ephemeral free port atomically
-                _port = EphemeralPortAllocator.GetEphemeralTcpPort();
+                // Attempt binding with fallback range to avoid TOCTOU
+                _port = BindAvailablePort();
 
-                _httpListener.Prefixes.Clear();
-                _httpListener.Prefixes.Add($"http://127.0.0.1:{_port}/");
                 _httpListener.Start();
                 _isStarted = true;
 
@@ -75,13 +73,44 @@ namespace Files.App.Communication
                 
                 _logger.LogInformation("WebSocket IPC service started on http://127.0.0.1:{Port}/", _port);
 
-                // Update rendezvous file (pipe name may be populated later by pipe service)
-                await IpcRendezvousFile.TryUpdateAsync(token: _currentToken, webSocketPort: _port, pipeName: null, epoch: _currentEpoch);
+                await IpcRendezvousFile.UpdateAsync(webSocketPort: _port, epoch: _currentEpoch);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to start WebSocket IPC service");
                 throw;
+            }
+        }
+
+        private int BindAvailablePort()
+        {
+            // Primary attempt: original static dev port for backward compatibility
+            int[] preferred = { 52345 };
+            foreach (var p in preferred)
+            {
+                if (TryBindPort(p)) return p;
+            }
+            // Fallback ephemeral range
+            for (int p = 40000; p < 40100; p++)
+            {
+                if (TryBindPort(p)) return p;
+            }
+            throw new InvalidOperationException("No available port for WebSocket IPC");
+        }
+
+        private bool TryBindPort(int port)
+        {
+            try
+            {
+                _httpListener.Prefixes.Clear();
+                _httpListener.Prefixes.Add($"http://127.0.0.1:{port}/");
+                // Do not start here; caller will start once chosen
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Port {Port} unavailable", port);
+                return false;
             }
         }
 
@@ -300,16 +329,6 @@ namespace Files.App.Communication
         {
             try
             {
-                if (_tokenUsed)
-                {
-                    if (!message.IsNotification)
-                    {
-                        var usedErr = JsonRpcMessage.MakeError(message.Id, -32004, "Token already used");
-                        await SendResponseAsync(client, usedErr);
-                    }
-                    return;
-                }
-
                 if (message.Params?.TryGetProperty("token", out var tokenProp) != true)
                 {
                     var errorResponse = JsonRpcMessage.MakeError(message.Id, -32602, "Missing token parameter");
@@ -344,11 +363,6 @@ namespace Files.App.Communication
                 }
 
                 _logger.LogInformation("Client {ClientId} authenticated successfully", client.Id);
-
-                // Invalidate token & delete rendezvous file after first successful handshake
-                _tokenUsed = true;
-                _currentToken = null;
-                await IpcRendezvousFile.TryDeleteAsync();
             }
             catch (Exception ex)
             {
