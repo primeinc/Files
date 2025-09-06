@@ -18,7 +18,7 @@ namespace Files.App.ViewModels.Settings
 	public sealed partial class IpcViewModel : ObservableObject
 	{
 		private readonly ILogger<IpcViewModel> _logger = Ioc.Default.GetRequiredService<ILogger<IpcViewModel>>();
-		private readonly IAppCommunicationService _wsService = Ioc.Default.GetRequiredService<IAppCommunicationService>();
+		private readonly IAppCommunicationService _ipcService = Ioc.Default.GetRequiredService<IAppCommunicationService>();
 
 		[ObservableProperty]
 		private bool _isEnabled;
@@ -40,9 +40,9 @@ namespace Files.App.ViewModels.Settings
 				ProtectedTokenStore.SetEnabled(value);
 
 				if (value)
-					_ = _wsService.StartAsync();
+					_ = _ipcService.StartAsync();
 				else
-					_ = _wsService.StopAsync();
+					_ = _ipcService.StopAsync();
 			}
 			catch (Exception ex)
 			{

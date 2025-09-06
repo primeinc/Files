@@ -112,19 +112,17 @@ namespace Files.App.Communication
         {
             var pipeSecurity = new PipeSecurity();
             var currentUser = WindowsIdentity.GetCurrent();
-            
-            // Allow full control to current user
-            pipeSecurity.AddAccessRule(new PipeAccessRule(
-                currentUser.User!,
-                PipeAccessRights.FullControl,
-                AccessControlType.Allow));
-            
-            // Deny access to everyone else
-            pipeSecurity.AddAccessRule(new PipeAccessRule(
-                new SecurityIdentifier(WellKnownSidType.WorldSid, null),
-                PipeAccessRights.FullControl,
-                AccessControlType.Deny));
-                
+            if (currentUser?.User != null)
+            {
+                // Grant full control to the current user (all processes running under this account)
+                pipeSecurity.AddAccessRule(new PipeAccessRule(
+                    currentUser.User,
+                    PipeAccessRights.FullControl,
+                    AccessControlType.Allow));
+            }
+            // NOTE: Do NOT add a blanket deny for World/Everyone. A deny ACE would also match the
+            // current user because that user is a member of the Everyone group, leading to ERROR_ACCESS_DENIED
+            // when a client in the same session attempts to connect.
             return pipeSecurity;
         }
 
@@ -166,14 +164,16 @@ namespace Files.App.Communication
                 client = new ClientContext
                 {
                     Cancellation = CancellationTokenSource.CreateLinkedTokenSource(_cancellation.Token),
-                    TransportHandle = server
+                    TransportHandle = server,
+                    PipeWriter = new BinaryWriter(server, Encoding.UTF8, leaveOpen: true),
+                    PipeWriteLock = new object()
                 };
                 _clients[client.Id] = client;
                 _logger.LogDebug("Pipe client {ClientId} connected", client.Id);
 
                 // Minimal framing: length (int32 little endian) + utf8 json
                 var reader = new BinaryReader(server, Encoding.UTF8, leaveOpen: true);
-                var writer = new BinaryWriter(server, Encoding.UTF8, leaveOpen: true);
+                var writer = client.PipeWriter!; // reuse
 
                 while (server.IsConnected && !client.Cancellation!.IsCancellationRequested)
                 {
@@ -304,13 +304,52 @@ namespace Files.App.Communication
 
         public async Task SendResponseAsync(ClientContext client, JsonRpcMessage response)
         {
-            // Named pipe responses handled directly in handler; not used here by coordinator currently.
+            if (client.PipeWriter is null)
+                return; // Not a pipe client
+            if (response.IsNotification)
+                return; // responses only
+            try
+            {
+                var json = response.ToJson();
+                var bytes = Encoding.UTF8.GetBytes(json);
+                var lenBytes = BitConverter.GetBytes(bytes.Length);
+                lock (client.PipeWriteLock!)
+                {
+                    client.PipeWriter.Write(lenBytes);
+                    client.PipeWriter.Write(bytes);
+                    client.PipeWriter.Flush();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed sending pipe response to {ClientId}", client.Id);
+            }
             await Task.CompletedTask;
         }
 
         public async Task BroadcastAsync(JsonRpcMessage notification)
         {
-            // Optional: implement broadcast for pipe clients later
+            if (!notification.IsNotification)
+                return;
+            var json = notification.ToJson();
+            var bytes = Encoding.UTF8.GetBytes(json);
+            var lenBytes = BitConverter.GetBytes(bytes.Length);
+            foreach (var kv in _clients)
+            {
+                var c = kv.Value;
+                if (!c.IsAuthenticated) continue;
+                try
+                {
+                    if (c.PipeWriter is null) continue;
+                    lock (c.PipeWriteLock!)
+                    {
+                        c.PipeWriter.Write(lenBytes);
+                        c.PipeWriter.Write(bytes);
+                        c.PipeWriter.Flush();
+                    }
+                }
+                catch { /* ignore individual client failures */ }
+            }
             await Task.CompletedTask;
         }
 

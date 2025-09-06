@@ -269,7 +269,9 @@ namespace Files.App.Helpers
 					// IPC system
 					.AddSingleton<RpcMethodRegistry>()
 					.AddSingleton<ActionRegistry>()
-					.AddSingleton<IAppCommunicationService, WebSocketAppCommunicationService>()
+					.AddSingleton<WebSocketAppCommunicationService>()
+					.AddSingleton<NamedPipeAppCommunicationService>()
+					.AddSingleton<IAppCommunicationService, MultiTransportCommunicationService>()
 					.AddSingleton<IIpcShellRegistry, IpcShellRegistry>()
 					.AddSingleton<IWindowResolver, WindowResolver>()
 					.AddSingleton<IpcCoordinator>()

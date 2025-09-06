@@ -12,22 +12,34 @@ namespace Files.App.Communication
 		private const string KEY_TOKEN = "Files_RemoteControl_ProtectedToken";
 		private const string KEY_ENABLED = "Files_RemoteControl_Enabled";
 		private const string KEY_EPOCH = "Files_RemoteControl_TokenEpoch";
+		private const string ENV_ENABLE = "FILES_IPC_ENABLE"; // set to 1/true to force-enable IPC services (used in tests & automation)
 
 		private static ApplicationDataContainer Settings => ApplicationData.Current.LocalSettings;
 
 		public static bool IsEnabled()
 		{
-			if (Settings.Values.TryGetValue(KEY_ENABLED, out var v) && v is bool b) 
+			// Explicit setting wins if present
+			if (Settings.Values.TryGetValue(KEY_ENABLED, out var v) && v is bool b)
 				return b;
 
-			return false;
+			// Environment variable override (non persisted) for test/automation scenarios
+			var env = Environment.GetEnvironmentVariable(ENV_ENABLE);
+			if (!string.IsNullOrEmpty(env) && (string.Equals(env, "1", StringComparison.OrdinalIgnoreCase) || string.Equals(env, "true", StringComparison.OrdinalIgnoreCase)))
+				return true;
+
+#if DEBUG
+			// In DEBUG builds default to enabled so local developer tools & tests work out of the box
+			return true;
+#else
+			return false; // production default remains disabled until explicitly enabled by user
+#endif
 		}
 
 		public static void SetEnabled(bool enabled) => Settings.Values[KEY_ENABLED] = enabled;
 
 		public static int GetEpoch()
 		{
-			if (Settings.Values.TryGetValue(KEY_EPOCH, out var v) && v is int e) 
+			if (Settings.Values.TryGetValue(KEY_EPOCH, out var v) && v is int e)
 				return e;
 
 			SetEpoch(1);

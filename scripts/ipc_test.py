@@ -3,7 +3,7 @@
 Comprehensive IPC test suite for Files App (WebSocket JSON-RPC).
 
 Usage:
-  python scripts/ipc_test.py --token <TOKEN> [--test <TEST_NAME>] [--navigate <PATH>] [--duration <SECONDS>]
+  python scripts/ipc_test.py [--test <TEST_NAME>] [--navigate <PATH>] [--duration <SECONDS>]
 
 Tests available:
   - basic: Basic connection and handshake
@@ -14,7 +14,7 @@ Tests available:
 
 Notes:
 - Ensure Remote control is enabled in Files (Settings > Advanced > Remote control)
-- Copy the token from settings page and pass it with --token
+- Token and port are automatically discovered from rendezvous file
 - Requires: pip install websockets
 """
 
@@ -24,11 +24,55 @@ import json
 import os
 import sys
 import time
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
 import websockets
 
-WS_URL = "ws://127.0.0.1:52345/"
+
+def discover_ipc_config() -> Tuple[str, int, Optional[str]]:
+    """Discover IPC configuration from rendezvous file.
+    
+    Returns:
+        Tuple of (token, websocket_port, pipe_name)
+    """
+    rendezvous_path = Path(os.environ['LOCALAPPDATA']) / 'FilesIPC' / 'ipc.info'
+    
+    if not rendezvous_path.exists():
+        raise FileNotFoundError(
+            f"Rendezvous file not found at {rendezvous_path}\n"
+            "Make sure Files App is running with Remote Control enabled"
+        )
+    
+    try:
+        with open(rendezvous_path, 'r') as f:
+            data = json.load(f)
+        
+        token = data.get('token')
+        port = data.get('webSocketPort')
+        pipe = data.get('pipeName')
+        
+        if not token:
+            raise ValueError("No token found in rendezvous file")
+        
+        if not port and not pipe:
+            raise ValueError("No connection endpoint found (neither WebSocket port nor pipe name)")
+        
+        print(f"[Discovery] Found IPC config:")
+        print(f"  Token: {token[:8]}...")
+        if port:
+            print(f"  WebSocket Port: {port}")
+        if pipe:
+            print(f"  Named Pipe: {pipe}")
+        print(f"  Server PID: {data.get('serverPid')}")
+        print(f"  Created: {data.get('createdUtc')}")
+        
+        return token, port or 52345, pipe
+        
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in rendezvous file: {e}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to read rendezvous file: {e}")
 
 
 class JsonRpcClient:
@@ -269,9 +313,10 @@ async def test_pathfix(client: JsonRpcClient):
         print("Note: Network paths may timeout - that's expected behavior")
 
 
-async def run(token: str, test_name: str, navigate_path: Optional[str], duration: int):
-    print(f"Connecting to {WS_URL} ...")
-    async with websockets.connect(WS_URL, max_size=8 * 1024 * 1024) as ws:
+async def run(token: str, port: int, test_name: str, navigate_path: Optional[str], duration: int):
+    ws_url = f"ws://127.0.0.1:{port}/"
+    print(f"Connecting to {ws_url} ...")
+    async with websockets.connect(ws_url, max_size=8 * 1024 * 1024) as ws:
         client = JsonRpcClient(ws)
         await client.start_receiver()
 
@@ -321,7 +366,8 @@ async def run(token: str, test_name: str, navigate_path: Optional[str], duration
 
 def main():
     parser = argparse.ArgumentParser(description="Files App IPC WebSocket test client")
-    parser.add_argument("--token", required=True, help="Authentication token from Files settings")
+    parser.add_argument("--token", help="Override authentication token (normally auto-discovered)")
+    parser.add_argument("--port", type=int, help="Override WebSocket port (normally auto-discovered)")
     parser.add_argument("--test", choices=["basic", "multi", "edge", "pathfix", "all"], 
                        default="basic", help="Which test to run")
     parser.add_argument("--navigate", help="Optional path to navigate to")
@@ -330,7 +376,28 @@ def main():
     args = parser.parse_args()
 
     try:
-        asyncio.run(run(args.token, args.test, args.navigate, args.duration))
+        # Auto-discover or use overrides
+        if args.token and args.port:
+            token = args.token
+            port = args.port
+            print(f"Using manual configuration: token={token[:8]}..., port={port}")
+        else:
+            try:
+                token, port, pipe_name = discover_ipc_config()
+                # Allow partial overrides
+                if args.token:
+                    token = args.token
+                    print(f"Using override token: {token[:8]}...")
+                if args.port:
+                    port = args.port
+                    print(f"Using override port: {port}")
+            except Exception as e:
+                print(f"Auto-discovery failed: {e}")
+                print("\nYou can specify connection details manually:")
+                print("  --token <TOKEN> --port <PORT>")
+                return 1
+        
+        asyncio.run(run(token, port, args.test, args.navigate, args.duration))
     except KeyboardInterrupt:
         print("\nInterrupted by user")
         return 0

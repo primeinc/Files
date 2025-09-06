@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Threading;
+using System.IO; // added for BinaryWriter
 
 namespace Files.App.Communication
 {
@@ -15,6 +16,9 @@ namespace Files.App.Communication
 		private int _tokens;
 		private DateTime _lastRefill;
 		private bool _disposed;
+
+		// Added: lock for pipe writer operations
+		internal object? PipeWriteLock { get; set; }
 
 		// Properties  
 		public Guid Id { get; } = Guid.NewGuid();
@@ -36,6 +40,9 @@ namespace Files.App.Communication
 		public object? TransportHandle { get; set; } // can store session id, pipe name, etc.
 
 		internal ConcurrentQueue<(string payload, bool isNotification, string? method)> SendQueue => _sendQueue;
+
+		// Added: BinaryWriter for named pipe responses/notifications
+		public BinaryWriter? PipeWriter { get; set; }
 
 		// Constructor
 		public ClientContext()
@@ -138,6 +145,7 @@ namespace Files.App.Communication
 
 			try { Cancellation?.Cancel(); } catch { }
 			try { WebSocket?.Dispose(); } catch { }
+			try { PipeWriter?.Dispose(); } catch { }
 			_disposed = true;
 		}
 	}
