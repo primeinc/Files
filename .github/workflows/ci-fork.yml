@@ -16,16 +16,18 @@ on:
 env:
   SOLUTION_PATH: '${{ github.workspace }}\Files.slnx'
   PACKAGE_PROJECT_PATH: '${{ github.workspace }}\src\Files.App (Package)\Files.Package.wapproj'
+  PACKAGE_PROJECT_DIR: '${{ github.workspace }}\src\Files.App (Package)'
   APPX_PACKAGE_DIR: '${{ github.workspace }}\artifacts\AppxPackages'
+  APPX_SELFSIGNED_CERT_PATH: '${{ github.workspace }}\.github\workflows\FilesApp_SelfSigned.pfx'
+  ARTIFACTS_STAGING_DIR: '${{ github.workspace }}\artifacts'
+  AUTOMATED_TESTS_ASSEMBLY_DIR: '${{ github.workspace }}\artifacts\TestsAssembly'
+  AUTOMATED_TESTS_PROJECT_DIR: '${{ github.workspace }}\tests\Files.InteractionTests'
+  AUTOMATED_TESTS_PROJECT_PATH: '${{ github.workspace }}\tests\Files.InteractionTests\Files.InteractionTests.csproj'
+  WINAPPDRIVER_EXE86_PATH: 'C:\Program Files (x86)\Windows Application Driver\WinAppDriver.exe'
 
 jobs:
   build:
     runs-on: windows-latest
-    
-    strategy:
-      matrix:
-        configuration: [Debug, Release]
-        platform: [x64]
     
     steps:
     - name: Checkout
@@ -46,40 +48,98 @@ jobs:
       run: |
         msbuild $env:SOLUTION_PATH `
           -t:Restore `
-          -p:Platform=${{ matrix.platform }} `
-          -p:Configuration=${{ matrix.configuration }} `
+          -p:Platform=x64 `
+          -p:Configuration=Release `
           -p:PublishReadyToRun=true `
           -v:quiet
 
-    - name: Build Files
+    - name: Create self signed cert
+      run: ./.github/scripts/Generate-SelfCertPfx.ps1 -Destination "$env:APPX_SELFSIGNED_CERT_PATH"
+
+    - name: Build & package Files
       run: |
         msbuild `
           $env:PACKAGE_PROJECT_PATH `
           -t:Build `
-          -p:Configuration=${{ matrix.configuration }} `
-          -p:Platform=${{ matrix.platform }} `
-          -p:AppxBundle=Never `
+          -t:_GenerateAppxPackage `
+          -p:Configuration=Release `
+          -p:Platform=x64 `
+          -p:AppxBundlePlatforms=x64 `
+          -p:AppxBundle=Always `
+          -p:UapAppxPackageBuildMode=SideloadOnly `
+          -p:AppxPackageDir=$env:APPX_PACKAGE_DIR `
+          -p:AppxPackageSigningEnabled=true `
+          -p:PackageCertificateKeyFile=$env:APPX_SELFSIGNED_CERT_PATH `
+          -p:PackageCertificatePassword="" `
+          -p:PackageCertificateThumbprint="" `
           -v:quiet
 
-    - name: Run Tests
+    - name: Build interaction tests
       run: |
-        dotnet test `
-          --configuration ${{ matrix.configuration }} `
-          --no-build `
-          --logger "console;verbosity=detailed" `
-          tests/Files.App.UITests/Files.App.UITests.csproj
-      continue-on-error: true
+        msbuild $env:AUTOMATED_TESTS_PROJECT_PATH `
+          -t:Build `
+          -p:Configuration=Release `
+          -p:Platform=x64 `
+          -v:quiet
 
-    - name: Upload Build Artifacts
-      if: matrix.configuration == 'Release'
+    - name: Copy tests to artifacts
+      shell: pwsh
+      run: |
+        Copy-Item `
+          -Path "$env:AUTOMATED_TESTS_PROJECT_DIR\bin" `
+          -Destination "$env:AUTOMATED_TESTS_ASSEMBLY_DIR" -Recurse
+
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: Files-${{ matrix.platform }}-${{ matrix.configuration }}
-        path: |
-          src\Files.App\bin\${{ matrix.platform }}\${{ matrix.configuration }}\**\*
-          !**\*.pdb
-          !**\*.xml
+        name: 'Fork-Package-Release-x64'
+        path: ${{ env.ARTIFACTS_STAGING_DIR }}
         retention-days: 7
+
+  test:
+    needs: [build]
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: 'Fork-Package-Release-x64'
+        path: ${{ env.ARTIFACTS_STAGING_DIR }}
+
+    - name: Install Files
+      shell: powershell
+      run: |
+        Set-Location "$env:APPX_PACKAGE_DIR"
+        $AppxPackageBundleDir = Get-ChildItem -Filter Files.Package_*_Test -Name
+        Set-Location $AppxPackageBundleDir
+        ./Install.ps1 -Force
+
+    - name: Set display resolution
+      run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
+
+    - name: Start WinAppDriver
+      shell: pwsh
+      run: Start-Process -FilePath "$env:WINAPPDRIVER_EXE86_PATH"
+
+    - name: Run interaction tests
+      uses: nick-fields/retry@v3
+      with:
+        timeout_minutes: 15
+        max_attempts: 2
+        shell: pwsh
+        command: |
+          dotnet test `
+            $env:AUTOMATED_TESTS_ASSEMBLY_DIR\**\Files.InteractionTests.dll `
+            --logger "console;verbosity=detailed"
 
   code-quality:
     runs-on: windows-latest
