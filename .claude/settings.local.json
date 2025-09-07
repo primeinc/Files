@@ -9,7 +9,12 @@
       "Bash(pip install:*)",
       "Bash(python scripts/ipc_test.py:*)",
       "Bash(find:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(powershell:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh api graphql:*)"
     ],
     "deny": [],
     "ask": []

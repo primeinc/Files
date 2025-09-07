@@ -4,16 +4,6 @@
 name: Fork CI
 
 on:
-  push:
-    branches:
-      - main
-      - 'feature/*'
-      - 'fix/*'
-    paths-ignore:
-      - 'assets/**'
-      - 'builds/**'
-      - 'docs/**'
-      - '*.md'
   pull_request:
     branches:
       - main
