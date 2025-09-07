@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Threading;
+using System.Threading.Tasks;
 using System.IO; // added for BinaryWriter
 
 namespace Files.App.Communication
@@ -17,6 +18,7 @@ namespace Files.App.Communication
 		private readonly ConcurrentQueue<(string payload, string method)> _notificationQueue = new();
 		// Track method counts for efficient duplicate dropping
 		private readonly ConcurrentDictionary<string, int> _notificationMethodCounts = new(StringComparer.OrdinalIgnoreCase);
+		private readonly SemaphoreSlim _messageAvailable = new(0); // Signal when messages are available
 		private long _queuedBytes = 0;
 		private int _tokens;
 		private DateTime _lastRefill;
@@ -44,9 +46,33 @@ namespace Files.App.Communication
 
 		public object? TransportHandle { get; set; } // can store session id, pipe name, etc.
 
+		// Async wait for messages to become available
+		internal async Task<(string payload, bool isNotification, string? method)> DequeueAsync(CancellationToken cancellationToken)
+		{
+			while (!cancellationToken.IsCancellationRequested)
+			{
+				await _messageAvailable.WaitAsync(cancellationToken);
+				if (TryDequeueInternal(out var item))
+					return item;
+			}
+			throw new OperationCanceledException();
+		}
+
 		// Efficient dequeue: responses first (high priority), then notifications (low priority)
 		// O(1) operation with no scanning required
 		internal bool TryDequeue(out (string payload, bool isNotification, string? method) item)
+		{
+			var result = TryDequeueInternal(out item);
+			if (!result && _messageAvailable.CurrentCount > 0)
+			{
+				// Drain any excess semaphore count to prevent buildup
+				while (_messageAvailable.CurrentCount > 0)
+					_messageAvailable.Wait(0);
+			}
+			return result;
+		}
+
+		private bool TryDequeueInternal(out (string payload, bool isNotification, string? method) item)
 		{
 			// Always dequeue responses first (high priority)
 			if (_responseQueue.TryDequeue(out var response))
@@ -141,6 +167,7 @@ namespace Files.App.Communication
 				
 				System.Threading.Interlocked.Add(ref _queuedBytes, bytes);
 				_responseQueue.Enqueue((payload, method));
+				_messageAvailable.Release(); // Signal message available
 				return true;
 			}
 
@@ -153,6 +180,7 @@ namespace Files.App.Communication
 				{
 					_notificationQueue.Enqueue((payload, method));
 					_notificationMethodCounts.AddOrUpdate(method, 1, (_, count) => count + 1);
+					_messageAvailable.Release(); // Signal message available
 				}
 				return true;
 			}
@@ -173,6 +201,7 @@ namespace Files.App.Communication
 						System.Threading.Interlocked.Add(ref _queuedBytes, bytes);
 						_notificationQueue.Enqueue((payload, method));
 						_notificationMethodCounts.AddOrUpdate(method, 1, (_, c) => c + 1);
+						_messageAvailable.Release(); // Signal message available
 						return true;
 					}
 				}
@@ -183,6 +212,7 @@ namespace Files.App.Communication
 					System.Threading.Interlocked.Add(ref _queuedBytes, bytes);
 					_notificationQueue.Enqueue((payload, method));
 					_notificationMethodCounts.AddOrUpdate(method, 1, (_, c) => c + 1);
+					_messageAvailable.Release(); // Signal message available
 					return true;
 				}
 			}
@@ -265,6 +295,7 @@ namespace Files.App.Communication
 
 			WebSocket?.Dispose();
 			PipeWriter?.Dispose();
+			_messageAvailable?.Dispose();
 		}
 	}
 }

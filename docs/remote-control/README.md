@@ -38,7 +38,7 @@ Strict JSON-RPC 2.0 implementation with helpers for creating responses and valid
 #### ProtectedTokenStore
 DPAPI-backed encrypted token storage in LocalSettings with epoch-based rotation. When tokens are rotated, the epoch increments and invalidates all existing client sessions.
 
-#### ClientContext  
+#### ClientContext
 Per-client state management including:
 - Token bucket rate limiting (configurable burst and refill rate)
 - Lossy message queue with method-based coalescing
@@ -48,7 +48,7 @@ Per-client state management including:
 #### RpcMethodRegistry
 Centralized registry for RPC method definitions including:
 - Authentication requirements
-- Notification permissions  
+- Notification permissions
 - Per-method payload size limits
 - Custom authorization policies
 
@@ -102,7 +102,7 @@ IpcConfig.GetMetadataTimeoutSec = 30;
 ### Authentication
 - `handshake` - Authenticate with token and establish session
 
-### State Query  
+### State Query
 - `getState` - Get current navigation state
 - `listActions` - Get available actions
 

@@ -309,17 +309,16 @@ namespace Files.App.Communication
         {
             try
             {
-                while (!Cancellation.IsCancellationRequested && client.Cancellation?.IsCancellationRequested != true)
+                var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+                    Cancellation.Token,
+                    client.Cancellation?.Token ?? CancellationToken.None);
+                
+                while (!linkedCts.Token.IsCancellationRequested)
                 {
-                    if (client.TryDequeue(out var item))
-                    {
-                        await SendToClientAsync(client, item.payload);
-                        client.DecreaseQueuedBytes(Encoding.UTF8.GetByteCount(item.payload));
-                    }
-                    else
-                    {
-                        await Task.Delay(IpcConfig.SendLoopPollingIntervalMs, Cancellation.Token);
-                    }
+                    // Async wait for messages - no polling needed
+                    var item = await client.DequeueAsync(linkedCts.Token);
+                    await SendToClientAsync(client, item.payload);
+                    client.DecreaseQueuedBytes(Encoding.UTF8.GetByteCount(item.payload));
                 }
             }
             catch (OperationCanceledException) { }
