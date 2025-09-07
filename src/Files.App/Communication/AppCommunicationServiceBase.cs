@@ -311,7 +311,7 @@ namespace Files.App.Communication
             {
                 while (!Cancellation.IsCancellationRequested && client.Cancellation?.IsCancellationRequested != true)
                 {
-                    if (client.SendQueue.TryDequeue(out var item))
+                    if (client.TryDequeue(out var item))
                     {
                         await SendToClientAsync(client, item.payload);
                         client.DecreaseQueuedBytes(Encoding.UTF8.GetByteCount(item.payload));

@@ -43,6 +43,10 @@ namespace Files.App.ViewModels
 		private readonly DispatcherQueue dispatcherQueue;
 		private readonly JsonElement defaultJson = JsonSerializer.SerializeToElement("{}");
 		private readonly string folderTypeTextLocalized = Strings.Folder.GetLocalizedResource();
+		
+		// Path validation cache to minimize file system calls
+		// Entries expire after 2 seconds to handle file system changes
+		private readonly ConcurrentDictionary<string, (bool exists, DateTime checkedAt)> pathValidationCache = new();
 
 		private Task? aProcessQueueAction;
 		private Task? gitProcessQueueAction;
@@ -1556,6 +1560,55 @@ namespace Files.App.ViewModels
 			return groupImage;
 		}
 
+		// Optimized path validation with caching to minimize file system calls
+		// Cache entries expire after 2 seconds to handle file system changes
+		private bool IsPathValid(string path)
+		{
+			// Virtual paths are always valid (no file system check needed)
+			if (path.StartsWith(Constants.PathValidationConstants.SHELL_FOLDER_UNC_PREFIX, StringComparison.Ordinal) ||
+			    path.StartsWith(Constants.PathValidationConstants.MTP_DEVICE_PREFIX, StringComparison.Ordinal))
+			{
+				return true;
+			}
+
+			var now = DateTime.UtcNow;
+			const double cacheExpirationSeconds = 2.0;
+
+			// Check cache first
+			if (pathValidationCache.TryGetValue(path, out var cached))
+			{
+				// If cache entry is fresh, return cached result
+				if ((now - cached.checkedAt).TotalSeconds < cacheExpirationSeconds)
+				{
+					return cached.exists;
+				}
+			}
+
+			// Perform actual file system check
+			bool exists = Directory.Exists(path);
+			
+			// Update cache with new result
+			pathValidationCache.AddOrUpdate(path, 
+				(exists, now), 
+				(_, _) => (exists, now));
+
+			// Clean up old cache entries periodically (every 100 checks)
+			if (pathValidationCache.Count > 100 && Random.Shared.Next(100) == 0)
+			{
+				var expiredKeys = pathValidationCache
+					.Where(kvp => (now - kvp.Value.checkedAt).TotalSeconds > cacheExpirationSeconds * 2)
+					.Select(kvp => kvp.Key)
+					.Take(20); // Clean up to 20 expired entries at a time
+
+				foreach (var key in expiredKeys)
+				{
+					pathValidationCache.TryRemove(key, out _);
+				}
+			}
+
+			return exists;
+		}
+
 		public void RefreshItems(string? previousDir, Action postLoadCallback = null)
 		{
 			RapidAddItemsToCollectionAsync(WorkingDirectory, previousDir, postLoadCallback);
@@ -1632,9 +1685,8 @@ namespace Files.App.ViewModels
 				return;
 
 			// Quick validation to prevent hanging on invalid paths
-			if (!path.StartsWith(Constants.PathValidationConstants.SHELL_FOLDER_UNC_PREFIX, StringComparison.Ordinal) && // Shell folders are virtual
-			    !path.StartsWith(Constants.PathValidationConstants.MTP_DEVICE_PREFIX, StringComparison.Ordinal) && // MTP devices / extended paths
-			    !Directory.Exists(path))
+			// Use cached validation to minimize expensive Directory.Exists calls
+			if (!IsPathValid(path))
 			{
 				Debug.WriteLine($"Skipping enumeration of non-existent path: {path}");
 				IsLoadingItems = false;

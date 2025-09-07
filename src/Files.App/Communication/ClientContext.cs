@@ -6,12 +6,17 @@ using System.IO; // added for BinaryWriter
 
 namespace Files.App.Communication
 {
-	// Per-client state with token-bucket, lossy enqueue and LastSeenUtc tracked.
+	// Per-client state with token-bucket, dual-priority queues and LastSeenUtc tracked.
+	// Optimized for performance: O(1) dequeue, intelligent notification coalescing
 	public sealed class ClientContext : IDisposable
 	{
 		// Fields
 		private readonly object _rateLock = new();
-		private readonly ConcurrentQueue<(string payload, bool isNotification, string? method)> _sendQueue = new();
+		// Separate queues for responses (high priority) and notifications (low priority)
+		private readonly ConcurrentQueue<(string payload, string? method)> _responseQueue = new();
+		private readonly ConcurrentQueue<(string payload, string method)> _notificationQueue = new();
+		// Track method counts for efficient duplicate dropping
+		private readonly ConcurrentDictionary<string, int> _notificationMethodCounts = new(StringComparer.OrdinalIgnoreCase);
 		private long _queuedBytes = 0;
 		private int _tokens;
 		private DateTime _lastRefill;
@@ -39,7 +44,41 @@ namespace Files.App.Communication
 
 		public object? TransportHandle { get; set; } // can store session id, pipe name, etc.
 
-		internal ConcurrentQueue<(string payload, bool isNotification, string? method)> SendQueue => _sendQueue;
+		// Efficient dequeue: responses first (high priority), then notifications (low priority)
+		// O(1) operation with no scanning required
+		internal bool TryDequeue(out (string payload, bool isNotification, string? method) item)
+		{
+			// Always dequeue responses first (high priority)
+			if (_responseQueue.TryDequeue(out var response))
+			{
+				var bytes = System.Text.Encoding.UTF8.GetByteCount(response.payload);
+				System.Threading.Interlocked.Add(ref _queuedBytes, -bytes);
+				item = (response.payload, false, response.method);
+				return true;
+			}
+			
+			// Then dequeue notifications (low priority)
+			if (_notificationQueue.TryDequeue(out var notification))
+			{
+				var bytes = System.Text.Encoding.UTF8.GetByteCount(notification.payload);
+				System.Threading.Interlocked.Add(ref _queuedBytes, -bytes);
+				
+				// Decrement method count
+				if (_notificationMethodCounts.TryGetValue(notification.method, out var count))
+				{
+					if (count <= 1)
+						_notificationMethodCounts.TryRemove(notification.method, out _);
+					else
+						_notificationMethodCounts.TryUpdate(notification.method, count - 1, count);
+				}
+				
+				item = (notification.payload, true, notification.method);
+				return true;
+			}
+			
+			item = default;
+			return false;
+		}
 
 		// Added: BinaryWriter for named pipe responses/notifications
 		public BinaryWriter? PipeWriter { get; set; }
@@ -72,66 +111,134 @@ namespace Files.App.Communication
 
 		public bool TryConsumeToken()
 		{
-			RefillTokens();
 			lock (_rateLock)
 			{
-				if (_tokens <= 0) 
-					return false;
-
-				_tokens--;
-				return true;
+				RefillTokens();
+				if (_tokens > 0)
+				{
+					_tokens--;
+					return true;
+				}
+				return false;
 			}
 		}
 
-		// Try enqueue with lossy policy; drops oldest notifications of the same method first when needed.
+		// Optimized TryEnqueue with dual-priority queues
+		// Responses always get through, notifications use intelligent coalescing
 		public bool TryEnqueue(string payload, bool isNotification, string? method = null)
 		{
 			var bytes = System.Text.Encoding.UTF8.GetByteCount(payload);
-			var newVal = System.Threading.Interlocked.Add(ref _queuedBytes, bytes);
-			if (newVal > MaxQueuedBytes)
+			
+			// Responses always get enqueued (critical for protocol)
+			if (!isNotification)
 			{
-				// attempt to free by dropping oldest notifications (prefer same-method)
-				int freed = 0;
-				var initialQueue = new System.Collections.Generic.List<(string payload, bool isNotification, string? method)>();
-				while (SendQueue.TryDequeue(out var old))
+				// Make room if needed by dropping notifications
+				while (System.Threading.Interlocked.Read(ref _queuedBytes) + bytes > MaxQueuedBytes)
 				{
-					if (!old.isNotification)
+					if (!DropOldestNotification())
+						break; // No more notifications to drop
+				}
+				
+				System.Threading.Interlocked.Add(ref _queuedBytes, bytes);
+				_responseQueue.Enqueue((payload, method));
+				return true;
+			}
+
+			// For notifications: check if we have room
+			var newVal = System.Threading.Interlocked.Add(ref _queuedBytes, bytes);
+			if (newVal <= MaxQueuedBytes)
+			{
+				// Fast path: under limit, just enqueue
+				if (method != null)
+				{
+					_notificationQueue.Enqueue((payload, method));
+					_notificationMethodCounts.AddOrUpdate(method, 1, (_, count) => count + 1);
+				}
+				return true;
+			}
+
+			// Revert the byte count
+			System.Threading.Interlocked.Add(ref _queuedBytes, -bytes);
+
+			// Try intelligent dropping for notifications
+			if (method != null)
+			{
+				// If we have duplicates of this method, drop the oldest one (coalescing)
+				if (_notificationMethodCounts.TryGetValue(method, out var existingCount) && existingCount > 0)
+				{
+					// This is O(n) but n is bounded and typically small
+					if (DropOldestNotificationOfMethod(method))
 					{
-						initialQueue.Add(old); // keep responses
-					}
-					else if (old.method != null && method != null && old.method.Equals(method, StringComparison.OrdinalIgnoreCase) && freed == 0)
-					{
-						// drop one older of same method
-						var b = System.Text.Encoding.UTF8.GetByteCount(old.payload);
-						System.Threading.Interlocked.Add(ref _queuedBytes, -b);
-						freed += b;
-						break;
-					}
-					else
-					{
-						// for fairness, try dropping other notifications as well
-						var b = System.Text.Encoding.UTF8.GetByteCount(old.payload);
-						System.Threading.Interlocked.Add(ref _queuedBytes, -b);
-						freed += b;
-						if (System.Threading.Interlocked.Read(ref _queuedBytes) <= MaxQueuedBytes) 
-							break;
+						// Now we should have room, enqueue the new notification
+						System.Threading.Interlocked.Add(ref _queuedBytes, bytes);
+						_notificationQueue.Enqueue((payload, method));
+						_notificationMethodCounts.AddOrUpdate(method, 1, (_, c) => c + 1);
+						return true;
 					}
 				}
-
-				// push back preserved responses
-				foreach (var item in initialQueue) 
-					SendQueue.Enqueue(item);
-
-				newVal = System.Threading.Interlocked.Read(ref _queuedBytes);
-				if (newVal + bytes > MaxQueuedBytes)
+				
+				// No duplicate to drop, try dropping any notification
+				if (DropOldestNotification())
 				{
-					// still cannot enqueue
-					return false;
+					System.Threading.Interlocked.Add(ref _queuedBytes, bytes);
+					_notificationQueue.Enqueue((payload, method));
+					_notificationMethodCounts.AddOrUpdate(method, 1, (_, c) => c + 1);
+					return true;
 				}
 			}
 
-			SendQueue.Enqueue((payload, isNotification, method));
-			return true;
+			// Can't make room
+			return false;
+		}
+
+		// Helper: Drop oldest notification of specific method
+		private bool DropOldestNotificationOfMethod(string targetMethod)
+		{
+			var tempQueue = new System.Collections.Generic.List<(string payload, string method)>();
+			var dropped = false;
+			
+			while (_notificationQueue.TryDequeue(out var item))
+			{
+				if (!dropped && item.method.Equals(targetMethod, StringComparison.OrdinalIgnoreCase))
+				{
+					// Drop this one
+					var droppedBytes = System.Text.Encoding.UTF8.GetByteCount(item.payload);
+					System.Threading.Interlocked.Add(ref _queuedBytes, -droppedBytes);
+					_notificationMethodCounts.AddOrUpdate(targetMethod, 0, (_, c) => Math.Max(0, c - 1));
+					dropped = true;
+				}
+				else
+				{
+					tempQueue.Add(item);
+				}
+			}
+			
+			// Re-enqueue the kept items
+			foreach (var item in tempQueue)
+				_notificationQueue.Enqueue(item);
+			
+			return dropped;
+		}
+
+		// Helper: Drop any oldest notification
+		private bool DropOldestNotification()
+		{
+			if (_notificationQueue.TryDequeue(out var dropped))
+			{
+				var droppedBytes = System.Text.Encoding.UTF8.GetByteCount(dropped.payload);
+				System.Threading.Interlocked.Add(ref _queuedBytes, -droppedBytes);
+				
+				// Update method count
+				if (_notificationMethodCounts.TryGetValue(dropped.method, out var count))
+				{
+					if (count <= 1)
+						_notificationMethodCounts.TryRemove(dropped.method, out _);
+					else
+						_notificationMethodCounts.TryUpdate(dropped.method, count - 1, count);
+				}
+				return true;
+			}
+			return false;
 		}
 
 		// Internal methods
@@ -143,10 +250,21 @@ namespace Files.App.Communication
 			if (_disposed)
 				return;
 
-			try { Cancellation?.Cancel(); } catch { }
-			try { WebSocket?.Dispose(); } catch { }
-			try { PipeWriter?.Dispose(); } catch { }
 			_disposed = true;
+			Cancellation?.Cancel();
+			Cancellation?.Dispose();
+
+			if (WebSocket?.State == WebSocketState.Open)
+			{
+				try
+				{
+					WebSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Disposing", CancellationToken.None).Wait(1000);
+				}
+				catch { }
+			}
+
+			WebSocket?.Dispose();
+			PipeWriter?.Dispose();
 		}
 	}
 }
