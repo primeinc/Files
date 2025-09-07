@@ -98,7 +98,8 @@ namespace Files.App.Communication
                     var json = JsonSerializer.Serialize(final, new JsonSerializerOptions { WriteIndented = false });
 
                     // Atomic write via temp file + replace to avoid readers seeing partial content
-                    var tmp = Path.Combine(Path.GetDirectoryName(path)!, Path.GetRandomFileName());
+                    var dir = Path.GetDirectoryName(path) ?? ".";
+                    var tmp = Path.Combine(dir, Path.GetRandomFileName());
                     File.WriteAllText(tmp, json);
                     File.Copy(tmp, path, overwrite: true);
                     File.Delete(tmp);

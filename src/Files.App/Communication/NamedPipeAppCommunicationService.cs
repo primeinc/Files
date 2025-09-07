@@ -167,7 +167,8 @@ namespace Files.App.Communication
             try
             {
                 var bytes = Encoding.UTF8.GetBytes(payload);
-                var len = BitConverter.GetBytes(bytes.Length);
+                var len = new byte[4];
+                System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(len, bytes.Length);
                 lock (client.PipeWriteLock)
                 {
                     client.PipeWriter.Write(len);

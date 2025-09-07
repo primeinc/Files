@@ -318,7 +318,7 @@ namespace Files.App.Communication
                     }
                     else
                     {
-                        await Task.Delay(10, Cancellation.Token);
+                        await Task.Delay(IpcConfig.SendLoopPollingIntervalMs, Cancellation.Token);
                     }
                 }
             }

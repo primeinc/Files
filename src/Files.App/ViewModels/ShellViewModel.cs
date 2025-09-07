@@ -47,6 +47,12 @@ namespace Files.App.ViewModels
 		// Path validation cache to minimize file system calls
 		// Entries expire after 2 seconds to handle file system changes
 		private readonly ConcurrentDictionary<string, (bool exists, DateTime checkedAt)> pathValidationCache = new();
+		
+		// Cache configuration constants
+		private const int PathCacheMaxSize = 100;
+		private const int PathCacheCleanupBatchSize = 20;
+		private const int PathCacheCleanupProbability = 100; // 1 in 100 chance
+		private const double PathCacheExpirationSeconds = 2.0;
 
 		private Task? aProcessQueueAction;
 		private Task? gitProcessQueueAction;
@@ -1572,13 +1578,12 @@ namespace Files.App.ViewModels
 			}
 
 			var now = DateTime.UtcNow;
-			const double cacheExpirationSeconds = 2.0;
 
 			// Check cache first
 			if (pathValidationCache.TryGetValue(path, out var cached))
 			{
 				// If cache entry is fresh, return cached result
-				if ((now - cached.checkedAt).TotalSeconds < cacheExpirationSeconds)
+				if ((now - cached.checkedAt).TotalSeconds < PathCacheExpirationSeconds)
 				{
 					return cached.exists;
 				}
@@ -1592,13 +1597,13 @@ namespace Files.App.ViewModels
 				(exists, now), 
 				(_, _) => (exists, now));
 
-			// Clean up old cache entries periodically (every 100 checks)
-			if (pathValidationCache.Count > 100 && Random.Shared.Next(100) == 0)
+			// Clean up old cache entries periodically
+			if (pathValidationCache.Count > PathCacheMaxSize && Random.Shared.Next(PathCacheCleanupProbability) == 0)
 			{
 				var expiredKeys = pathValidationCache
-					.Where(kvp => (now - kvp.Value.checkedAt).TotalSeconds > cacheExpirationSeconds * 2)
+					.Where(kvp => (now - kvp.Value.checkedAt).TotalSeconds > PathCacheExpirationSeconds * 2)
 					.Select(kvp => kvp.Key)
-					.Take(20); // Clean up to 20 expired entries at a time
+					.Take(PathCacheCleanupBatchSize);
 
 				foreach (var key in expiredKeys)
 				{

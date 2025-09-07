@@ -20,5 +20,7 @@ namespace Files.App.Communication
 		public static int GetMetadataTimeoutSec { get; set; } = Constants.IpcSettings.GetMetadataTimeoutSec;
 
 		public static bool EnableIpcInDebugMode { get; set; } = false; // opt-in
+		
+		public static int SendLoopPollingIntervalMs { get; set; } = 10; // milliseconds between queue checks
 	}
 }

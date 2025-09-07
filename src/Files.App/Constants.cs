@@ -310,6 +310,7 @@ namespace Files.App
 			public const string TAG_PREFIX = "tag:";
 			public const string SHELL_FOLDER_UNC_PREFIX = @"\\SHELL\"; // virtual shell namespace root used internally
 			public const string MTP_DEVICE_PREFIX = @"\\?\"; // Win32 extended path / MTP devices
+			public const string DEVICE_NAMESPACE_PREFIX = @"\\.\"; // Win32 device namespace prefix
 		}
 	}
 }
