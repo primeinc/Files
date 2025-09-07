@@ -166,7 +166,7 @@ namespace Files.App.Communication
             // Dispatch
             try
             {
-                OnRequestReceived?.Invoke(client, message);
+                await (OnRequestReceived?.Invoke(client, message) ?? Task.CompletedTask);
             }
             catch (Exception ex)
             {

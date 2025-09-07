@@ -76,7 +76,7 @@ namespace Files.App.ViewModels
         {
             if (!TryNormalizePath(path, out var normalizedPath))
             {
-                throw new ArgumentException("Invalid path");
+                throw new JsonRpcException(JsonRpcException.InvalidParams, "Invalid path");
             }
 
             await _uiQueue.EnqueueAsync(async () =>
@@ -101,7 +101,7 @@ namespace Files.App.ViewModels
         {
             if (string.IsNullOrEmpty(actionId) || !_actions.CanExecute(actionId))
             {
-                throw new ArgumentException("Action not found or cannot execute");
+                throw new JsonRpcException(JsonRpcException.InvalidParams, "Action not found or cannot execute");
             }
 
             await _uiQueue.EnqueueAsync(async () =>
@@ -138,9 +138,6 @@ namespace Files.App.ViewModels
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _nav = nav ?? throw new ArgumentNullException(nameof(nav));
             _uiQueue = new UIOperationQueue(dispatcher ?? throw new ArgumentNullException(nameof(dispatcher)));
-
-            // Don't subscribe here - IpcCoordinator routes to us
-            // _comm.OnRequestReceived += HandleRequestAsync;
 
             _shell.WorkingDirectoryModified += Shell_WorkingDirectoryModified;
             _nav.StateChanged += Nav_StateChanged;

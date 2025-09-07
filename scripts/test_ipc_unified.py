@@ -77,6 +77,7 @@ class WebSocketClient(IpcClient):
         self.ws = None
         self._id = 1
         self._responses = {}
+        self._response_events = {}
         self._receiver_task = None
     
     async def connect(self, token: str):
@@ -96,6 +97,9 @@ class WebSocketClient(IpcClient):
                 data = json.loads(msg)
                 if "id" in data and data["id"] is not None:
                     self._responses[data["id"]] = data
+                    # Set event if waiting for this response
+                    if data["id"] in self._response_events:
+                        self._response_events[data["id"]].set()
         except (websockets.exceptions.ConnectionClosed, 
                 websockets.exceptions.ConnectionClosedOK,
                 asyncio.CancelledError):
@@ -115,18 +119,25 @@ class WebSocketClient(IpcClient):
         if params:
             msg["params"] = params
         
+        # Create event for this response
+        event = asyncio.Event()
+        self._response_events[msg_id] = event
+        
         await self.ws.send(json.dumps(msg))
         
-        # Wait for response
-        for _ in range(50):  # 5 second timeout
-            if msg_id in self._responses:
-                resp = self._responses.pop(msg_id)
-                if "error" in resp and resp["error"]:
-                    raise RuntimeError(f"RPC error: {resp['error']}")
-                return resp.get("result")
-            await asyncio.sleep(0.1)
+        # Wait for response with timeout
+        try:
+            await asyncio.wait_for(event.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            self._response_events.pop(msg_id, None)
+            raise TimeoutError(f"No response for {method} (id: {msg_id})")
         
-        raise TimeoutError(f"No response for {method}")
+        # Get and return response
+        self._response_events.pop(msg_id, None)
+        resp = self._responses.pop(msg_id)
+        if "error" in resp and resp["error"]:
+            raise RuntimeError(f"RPC error: {resp['error']}")
+        return resp.get("result")
     
     async def close(self):
         """Close WebSocket connection."""
@@ -184,7 +195,11 @@ class NamedPipeClient(IpcClient):
         win32file.WriteFile(self.pipe_handle, length_bytes + json_bytes)
         
         # Read response (may get notifications first)
-        for _ in range(10):
+        import time
+        start_time = time.time()
+        timeout = 5.0  # 5-second timeout
+        
+        while time.time() - start_time < timeout:
             # Read length
             _, length_data = win32file.ReadFile(self.pipe_handle, 4)
             length = struct.unpack('<I', length_data)[0]
@@ -202,7 +217,7 @@ class NamedPipeClient(IpcClient):
                     raise RuntimeError(f"RPC error: {response['error']}")
                 return response.get("result")
         
-        raise TimeoutError(f"No response for {method}")
+        raise TimeoutError(f"No response for {method} after {timeout} seconds")
     
     async def close(self):
         """Close Named Pipe connection."""

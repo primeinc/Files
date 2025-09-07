@@ -80,7 +80,7 @@ namespace Files.App.Views.Shells
 				
 				// Get the window ID from the current MainWindow's AppWindow
 				// Extract the underlying numeric value (ulong) and fall back to 0 if unavailable, then cast to uint
-				var windowId = (uint)(MainWindow.Instance?.AppWindow?.Id.Value ?? 0UL);
+				var windowId = MainWindow.Instance?.AppWindow?.Id.Value is ulong id ? (uint)id : 0u;
 
 				_ipcBootstrapper = new ShellIpcBootstrapper(
 					registry,
