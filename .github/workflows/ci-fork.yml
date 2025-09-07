@@ -38,22 +38,28 @@ jobs:
 
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
-      with:
-        vs-version: '[17.0,)'
+    - name: Setup NuGet
+      uses: NuGet/setup-nuget@v2
 
-    - name: Restore NuGet
-      run: |
-        dotnet restore $env:SOLUTION_PATH
-
-    - name: Build Solution
+    - name: Restore Files
+      shell: pwsh
       run: |
         msbuild $env:SOLUTION_PATH `
-          /p:Configuration=${{ matrix.configuration }} `
-          /p:Platform=${{ matrix.platform }} `
-          /p:AppxPackageDir=$env:APPX_PACKAGE_DIR `
-          /p:AppxBundle=Never `
-          /p:AppxPackageSigningEnabled=false `
-          /p:GenerateAppxPackageOnBuild=false
+          -t:Restore `
+          -p:Platform=${{ matrix.platform }} `
+          -p:Configuration=${{ matrix.configuration }} `
+          -p:PublishReadyToRun=true `
+          -v:quiet
+
+    - name: Build Files
+      run: |
+        msbuild `
+          $env:PACKAGE_PROJECT_PATH `
+          -t:Build `
+          -p:Configuration=${{ matrix.configuration }} `
+          -p:Platform=${{ matrix.platform }} `
+          -p:AppxBundle=Never `
+          -v:quiet
 
     - name: Run Tests
       run: |
