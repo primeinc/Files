@@ -74,9 +74,13 @@ namespace Files.App.Views.Shells
 				var bootstrapLogger = Ioc.Default.GetRequiredService<ILogger<ShellIpcBootstrapper>>();
 				var adapterLogger = Ioc.Default.GetRequiredService<ILogger<ShellIpcAdapter>>();
 
-				// Get the tab ID from the parent TabBarItem if available
-				var tabId = Guid.NewGuid(); // TODO: Get actual tab ID from TabBarItem
-				const uint windowId = 1; // TODO: Get actual window ID
+				// Get the tab ID - for now we generate a unique ID per shell instance
+				// In the future, this could be retrieved from the parent TabBarItem if it gets a TabId property
+				var tabId = Guid.NewGuid();
+				
+				// Get the window ID from the current MainWindow's AppWindow
+				// Extract the underlying numeric value (ulong) and fall back to 0 if unavailable, then cast to uint
+				var windowId = (uint)(MainWindow.Instance?.AppWindow?.Id.Value ?? 0UL);
 
 				_ipcBootstrapper = new ShellIpcBootstrapper(
 					registry,

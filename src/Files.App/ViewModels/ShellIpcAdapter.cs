@@ -13,7 +13,7 @@ using Files.App.Data.Contracts;
 
 namespace Files.App.ViewModels
 {
-    // Adapter with strict allowlist, path normalization, selection cap and structured errors.
+    // Adapter with strict allow list, path normalization, selection cap and structured errors.
     public sealed class ShellIpcAdapter
     {
         // Public methods for IpcCoordinator to call
