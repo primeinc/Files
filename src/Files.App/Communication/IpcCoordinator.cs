@@ -52,7 +52,7 @@ namespace Files.App.Communication
                 // Collapse whitespace
                 stack = Regex.Replace(stack, @"\s+", " ");
                 // Keep it reasonably small
-                if (stack.Length > 300) stack = stack[..300] + "…";
+                if (stack.Length > 300) stack = stack[..300] + "...";
             }
             catch { stack = string.Empty; }
             return ex.GetType().Name + ": " + ex.Message + (string.IsNullOrEmpty(stack) ? string.Empty : "; stack: " + stack);

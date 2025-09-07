@@ -16,6 +16,17 @@ namespace Files.App.ViewModels
     // Adapter with strict allow list, path normalization, selection cap and structured errors.
     public sealed class ShellIpcAdapter
     {
+        private readonly ShellViewModel _shell;
+        private readonly IAppCommunicationService _comm;
+        private readonly ActionRegistry _actions;
+        private readonly RpcMethodRegistry _methodRegistry;
+        private readonly UIOperationQueue _uiQueue;
+        private readonly ILogger<ShellIpcAdapter> _logger;
+        private readonly INavigationStateProvider _nav;
+
+        private readonly TimeSpan _coalesceWindow = TimeSpan.FromMilliseconds(100);
+        private DateTime _lastWdmNotif = DateTime.MinValue;
+
         // Public methods for IpcCoordinator to call
         public async Task<object> GetStateAsync()
         {
@@ -111,16 +122,6 @@ namespace Files.App.ViewModels
 
             return new { status = "ok" };
         }
-        private readonly ShellViewModel _shell;
-        private readonly IAppCommunicationService _comm;
-        private readonly ActionRegistry _actions;
-        private readonly RpcMethodRegistry _methodRegistry;
-        private readonly UIOperationQueue _uiQueue;
-        private readonly ILogger<ShellIpcAdapter> _logger;
-        private readonly INavigationStateProvider _nav;
-
-        private readonly TimeSpan _coalesceWindow = TimeSpan.FromMilliseconds(100);
-        private DateTime _lastWdmNotif = DateTime.MinValue;
 
         public ShellIpcAdapter(
             ShellViewModel shell,

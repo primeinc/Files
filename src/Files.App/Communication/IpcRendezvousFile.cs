@@ -100,10 +100,26 @@ namespace Files.App.Communication
                     // Atomic write via temp file + replace to avoid readers seeing partial content
                     var dir = Path.GetDirectoryName(path) ?? ".";
                     var tmp = Path.Combine(dir, Path.GetRandomFileName());
-                    File.WriteAllText(tmp, json);
-                    File.Copy(tmp, path, overwrite: true);
-                    File.Delete(tmp);
-                    Secure(path);
+                    
+                    try
+                    {
+                        File.WriteAllText(tmp, json);
+                        // Use File.Replace for atomic replacement (Windows-specific but this is a Windows app)
+                        // If destination doesn't exist, Replace will fail, so fall back to Move
+                        if (File.Exists(path))
+                            File.Replace(tmp, path, null); // null backup means no backup
+                        else
+                            File.Move(tmp, path);
+                        Secure(path);
+                    }
+                    finally
+                    {
+                        // Ensure temp file is always cleaned up if it still exists
+                        if (File.Exists(tmp))
+                        {
+                            try { File.Delete(tmp); } catch { }
+                        }
+                    }
                 }
             }
             catch (Exception ex)

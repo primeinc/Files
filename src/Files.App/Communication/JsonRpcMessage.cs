@@ -6,8 +6,10 @@ namespace Files.App.Communication
 	// Strict JSON-RPC 2.0 model with helpers that preserve original id types and enforce result XOR error.
 	public sealed record JsonRpcMessage
 	{
+		private const string JsonRpcVersion = "2.0";
+
 		[JsonPropertyName("jsonrpc")]
-		public string JsonRpc { get; init; } = "2.0";
+		public string JsonRpc { get; init; } = JsonRpcVersion;
 
 		[JsonPropertyName("id")]
 		public JsonElement? Id { get; init; } // omitted => notification
@@ -47,7 +49,7 @@ namespace Files.App.Communication
 			return new JsonRpcMessage { Id = id, Result = doc };
 		}
 
-		public static bool ValidJsonRpc(JsonRpcMessage? msg) => msg is not null && msg.JsonRpc == "2.0";
+		public static bool ValidJsonRpc(JsonRpcMessage? msg) => msg is not null && msg.JsonRpc == JsonRpcVersion;
 
 		// Validate that incoming message is a legal JSON-RPC request/notification/response shape
 		public static bool IsInvalidRequest(JsonRpcMessage m)
