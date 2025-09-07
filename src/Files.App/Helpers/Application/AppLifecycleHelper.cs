@@ -143,13 +143,11 @@ namespace Files.App.Helpers
 
 		private static async Task InitializeIpcAsync(IAppCommunicationService ipcService, IpcCoordinator ipcCoordinator)
 		{
-			Console.WriteLine("[IPC] Starting IPC service...");
+			App.Logger?.LogInformation("[IPC] Starting IPC service...");
 			await ipcService.StartAsync();
-			Console.WriteLine("[IPC] IPC service started, initializing coordinator...");
-			
-			// Initialize coordinator immediately so it's ready to handle requests
+			App.Logger?.LogInformation("[IPC] IPC service started, initializing coordinator...");
 			ipcCoordinator.Initialize();
-			Console.WriteLine("[IPC] IPC system fully initialized and ready for requests");
+			App.Logger?.LogInformation("[IPC] IPC system fully initialized and ready for requests");
 		}
 
 		/// <summary>

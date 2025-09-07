@@ -143,7 +143,11 @@ namespace Files.App.Views.Shells
 
 		protected override void OnNavigationParamsChanged()
 		{
-			if (string.IsNullOrEmpty(NavParams?.NavPath) || NavParams.NavPath == "Home")
+			var home = Constants.PathValidationConstants.HOME_PREFIX;
+			var releaseNotes = Constants.PathValidationConstants.RELEASE_NOTES;
+			var tagPrefix = Constants.PathValidationConstants.TAG_PREFIX;
+
+			if (string.IsNullOrEmpty(NavParams?.NavPath) || NavParams.NavPath == home)
 			{
 				ItemDisplayFrame.Navigate(
 					typeof(HomePage),
@@ -153,7 +157,7 @@ namespace Files.App.Views.Shells
 						AssociatedTabInstance = this
 					}, new SuppressNavigationTransitionInfo());
 			}
-			else if (NavParams.NavPath == "ReleaseNotes")
+			else if (NavParams.NavPath == releaseNotes)
 			{
 				ItemDisplayFrame.Navigate(
 					typeof(ReleaseNotesPage),
@@ -163,20 +167,9 @@ namespace Files.App.Views.Shells
 						AssociatedTabInstance = this
 					}, new SuppressNavigationTransitionInfo());
 			}
-			// TODO add settings page
-			//else if (NavParams.NavPath == "Settings")
-			//{
-			//	ItemDisplayFrame.Navigate(
-			//		typeof(ReleaseNotesPage),
-			//		new NavigationArguments()
-			//		{
-			//			NavPathParam = NavParams?.NavPath,
-			//			AssociatedTabInstance = this
-			//		}, new SuppressNavigationTransitionInfo());
-			//}
 			else
 			{
-				var isTagSearch = NavParams.NavPath.StartsWith("tag:");
+				var isTagSearch = NavParams.NavPath.StartsWith(tagPrefix, StringComparison.OrdinalIgnoreCase);
 
 				ItemDisplayFrame.Navigate(
 					InstanceViewModel.FolderSettings.GetLayoutType(NavParams.NavPath),
@@ -185,7 +178,7 @@ namespace Files.App.Views.Shells
 						NavPathParam = NavParams.NavPath,
 						SelectItems = !string.IsNullOrWhiteSpace(NavParams?.SelectItem) ? new[] { NavParams.SelectItem } : null,
 						IsSearchResultPage = isTagSearch,
-						SearchPathParam = isTagSearch ? "Home" : null,
+						SearchPathParam = isTagSearch ? home : null,
 						SearchQuery = isTagSearch ? NavParams.NavPath : null,
 						AssociatedTabInstance = this
 					});
@@ -283,7 +276,7 @@ namespace Files.App.Views.Shells
 					typeof(HomePage),
 					new NavigationArguments()
 					{
-						NavPathParam = "Home",
+						NavPathParam = Constants.PathValidationConstants.HOME_PREFIX,
 						AssociatedTabInstance = this
 					},
 					new SuppressNavigationTransitionInfo());
@@ -327,7 +320,7 @@ namespace Files.App.Views.Shells
 				typeof(HomePage),
 				new NavigationArguments()
 				{
-					NavPathParam = "Home",
+					NavPathParam = Constants.PathValidationConstants.HOME_PREFIX,
 					AssociatedTabInstance = this
 				},
 				new SuppressNavigationTransitionInfo());
@@ -339,7 +332,7 @@ namespace Files.App.Views.Shells
 				typeof(ReleaseNotesPage),
 				new NavigationArguments()
 				{
-					NavPathParam = "ReleaseNotes",
+					NavPathParam = Constants.PathValidationConstants.RELEASE_NOTES,
 					AssociatedTabInstance = this
 				},
 				new SuppressNavigationTransitionInfo());
@@ -348,6 +341,7 @@ namespace Files.App.Views.Shells
 		public override void NavigateToPath(string? navigationPath, Type? sourcePageType, NavigationArguments? navArgs = null)
 		{
 			ShellViewModel.FilesAndFoldersFilter = null;
+			var tagPrefix = Constants.PathValidationConstants.TAG_PREFIX;
 
 			if (sourcePageType is null && !string.IsNullOrEmpty(navigationPath))
 				sourcePageType = InstanceViewModel.FolderSettings.GetLayoutType(navigationPath);
@@ -368,7 +362,7 @@ namespace Files.App.Views.Shells
 						StringComparison.OrdinalIgnoreCase)) &&
 					(TabBarItemParameter?.NavigationParameter is not string navArg ||
 					string.IsNullOrEmpty(navArg) ||
-					!navArg.StartsWith("tag:"))) // Return if already selected
+					!navArg.StartsWith(tagPrefix, StringComparison.OrdinalIgnoreCase))) // Return if already selected
 				{
 					if (InstanceViewModel?.FolderSettings is LayoutPreferencesManager fsModel)
 						fsModel.IsLayoutModeChanging = false;

@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using Windows.Security.Cryptography;
 using Windows.Security.Cryptography.DataProtection;
 using Windows.Storage;
+using Microsoft.Extensions.Logging;
 
 namespace Files.App.Communication
 {
@@ -27,12 +28,14 @@ namespace Files.App.Communication
 			if (!string.IsNullOrEmpty(env) && (string.Equals(env, "1", StringComparison.OrdinalIgnoreCase) || string.Equals(env, "true", StringComparison.OrdinalIgnoreCase)))
 				return true;
 
-#if DEBUG
-			// In DEBUG builds default to enabled so local developer tools & tests work out of the box
-			return true;
-#else
+			// Log a warning if enabled in debug mode, but don't enable by default
+			if (System.Diagnostics.Debugger.IsAttached && IpcConfig.EnableIpcInDebugMode)
+			{
+				App.Logger?.LogWarning("?? IPC enabled in DEBUG mode - security risk");
+				return true;
+			}
+
 			return false; // production default remains disabled until explicitly enabled by user
-#endif
 		}
 
 		public static void SetEnabled(bool enabled) => Settings.Values[KEY_ENABLED] = enabled;

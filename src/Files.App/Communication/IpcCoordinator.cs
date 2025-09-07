@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Files.App.ViewModels;
 using Files.App.Data.Contracts;
+using System.Text.RegularExpressions;
 
 namespace Files.App.Communication
 {
@@ -35,6 +36,26 @@ namespace Files.App.Communication
         {
             _comm.OnRequestReceived += HandleRequestAsync;
             _logger.LogInformation("IPC coordinator initialized - routing enabled");
+        }
+
+        private static string SanitizeException(Exception ex)
+        {
+            var stack = ex.StackTrace ?? string.Empty;
+            try
+            {
+                // Remove absolute Windows file paths ending with .cs:line N
+                stack = Regex.Replace(stack, @"[A-Z]:\\[^:]+\.cs:line \d+", string.Empty, RegexOptions.IgnoreCase);
+                // Remove GUIDs
+                stack = Regex.Replace(stack, @"[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}", string.Empty);
+                // Remove likely base64 tokens (length > 20, url safe or standard base64 charset)
+                stack = Regex.Replace(stack, @"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9_\-/+]{20,}={0,2}(?![A-Za-z0-9+/=_-])", "[redacted]");
+                // Collapse whitespace
+                stack = Regex.Replace(stack, @"\s+", " ");
+                // Keep it reasonably small
+                if (stack.Length > 300) stack = stack[..300] + "…";
+            }
+            catch { stack = string.Empty; }
+            return ex.GetType().Name + ": " + ex.Message + (string.IsNullOrEmpty(stack) ? string.Empty : "; stack: " + stack);
         }
 
         private async Task HandleRequestAsync(ClientContext client, JsonRpcMessage request)
@@ -68,7 +89,8 @@ namespace Files.App.Communication
                 
                 if (!request.IsNotification)
                 {
-                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeResult(request.Id, result));
+                    var safeResult = result ?? new { status = "ok" };
+                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeResult(request.Id, safeResult));
                 }
 
                 var elapsed = DateTime.UtcNow - startTime;
@@ -92,24 +114,8 @@ namespace Files.App.Communication
                 
                 if (!request.IsNotification)
                 {
-                    string sanitizedStack = string.Empty;
-                    try
-                    {
-                        if (!string.IsNullOrEmpty(ex.StackTrace))
-                        {
-                            sanitizedStack = ex.StackTrace.Replace("\r\n", " ").Replace("\n", " ");
-                            if (sanitizedStack.Length > 500)
-                                sanitizedStack = sanitizedStack.Substring(0, 500);
-                        }
-                    }
-                    catch
-                    {
-                        // Ignore any failure during sanitization
-                    }
-
-                    var errorMessage = $"Exception: {ex.GetType().Name}: {ex.Message}. StackTrace: {sanitizedStack}";
-                    await _comm.SendResponseAsync(client, 
-                        JsonRpcMessage.MakeError(request.Id, JsonRpcException.InternalError, errorMessage));
+                    var sanitized = SanitizeException(ex);
+                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, JsonRpcException.InternalError, sanitized));
                 }
             }
         }
@@ -187,6 +193,8 @@ namespace Files.App.Communication
                     if (request.Params.HasValue && request.Params.Value.TryGetProperty("path", out var pathProp))
                     {
                         var path = pathProp.GetString();
+                        if (string.IsNullOrWhiteSpace(path))
+                            throw new JsonRpcException(JsonRpcException.InvalidParams, "Missing path parameter");
                         return await adapter.NavigateAsync(path);
                     }
                     throw new JsonRpcException(JsonRpcException.InvalidParams, "Missing path parameter");
@@ -199,7 +207,11 @@ namespace Files.App.Communication
                         foreach (var p in pathsElem.EnumerateArray())
                         {
                             if (p.ValueKind == JsonValueKind.String)
-                                paths.Add(p.GetString());
+                            {
+                                var s = p.GetString();
+                                if (!string.IsNullOrWhiteSpace(s))
+                                    paths.Add(s);
+                            }
                         }
                     }
                     return await adapter.GetMetadataAsync(paths);
@@ -208,6 +220,8 @@ namespace Files.App.Communication
                     if (request.Params.HasValue && request.Params.Value.TryGetProperty("actionId", out var actionIdProp))
                     {
                         var actionId = actionIdProp.GetString();
+                        if (string.IsNullOrWhiteSpace(actionId))
+                            throw new JsonRpcException(JsonRpcException.InvalidParams, "Missing actionId parameter");
                         return await adapter.ExecuteActionAsync(actionId);
                     }
                     throw new JsonRpcException(JsonRpcException.InvalidParams, "Missing actionId parameter");

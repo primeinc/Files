@@ -301,5 +301,15 @@ namespace Files.App
 				"FilesDev", // dev
 			};
 		}
+
+		public static class PathValidationConstants
+		{
+			public const string SHELL_PREFIX = "shell:";
+			public const string HOME_PREFIX = "Home";
+			public const string RELEASE_NOTES = "ReleaseNotes";
+			public const string TAG_PREFIX = "tag:";
+			public const string SHELL_FOLDER_UNC_PREFIX = @"\\SHELL\"; // virtual shell namespace root used internally
+			public const string MTP_DEVICE_PREFIX = @"\\?\"; // Win32 extended path / MTP devices
+		}
 	}
 }

@@ -1632,8 +1632,8 @@ namespace Files.App.ViewModels
 				return;
 
 			// Quick validation to prevent hanging on invalid paths
-			if (!path.StartsWith(@"\\SHELL\", StringComparison.Ordinal) && // Shell folders are virtual
-			    !path.StartsWith(@"\\?\", StringComparison.Ordinal) && // MTP devices
+			if (!path.StartsWith(Constants.PathValidationConstants.SHELL_FOLDER_UNC_PREFIX, StringComparison.Ordinal) && // Shell folders are virtual
+			    !path.StartsWith(Constants.PathValidationConstants.MTP_DEVICE_PREFIX, StringComparison.Ordinal) && // MTP devices / extended paths
 			    !Directory.Exists(path))
 			{
 				Debug.WriteLine($"Skipping enumeration of non-existent path: {path}");
@@ -1719,8 +1719,8 @@ namespace Files.App.ViewModels
 			var isBoxFolder = CloudDrivesManager.Drives.FirstOrDefault(x => x.Text == "Box")?.Path?.TrimEnd('\\') is string boxFolder && path.StartsWith(boxFolder);
 			bool isWslDistro = path.StartsWith(@"\\wsl$\", StringComparison.OrdinalIgnoreCase) || path.StartsWith(@"\\wsl.localhost\", StringComparison.OrdinalIgnoreCase)
 				|| path.Equals(@"\\wsl$", StringComparison.OrdinalIgnoreCase) || path.Equals(@"\\wsl.localhost", StringComparison.OrdinalIgnoreCase);
-			bool isMtp = path.StartsWith(@"\\?\", StringComparison.Ordinal);
-			bool isShellFolder = path.StartsWith(@"\\SHELL\", StringComparison.Ordinal);
+			bool isMtp = path.StartsWith(Constants.PathValidationConstants.MTP_DEVICE_PREFIX, StringComparison.Ordinal);
+			bool isShellFolder = path.StartsWith(Constants.PathValidationConstants.SHELL_FOLDER_UNC_PREFIX, StringComparison.Ordinal);
 			bool isNetwork = path.StartsWith(@"\\", StringComparison.Ordinal) &&
 				!isMtp &&
 				!isShellFolder &&
@@ -2000,7 +2000,7 @@ namespace Files.App.ViewModels
 
 		public void CheckForBackgroundImage()
 		{
-			if (WorkingDirectory == "Home" || WorkingDirectory == "ReleaseNotes" || WorkingDirectory == "Settings")
+			if (WorkingDirectory == Constants.PathValidationConstants.HOME_PREFIX || WorkingDirectory == Constants.PathValidationConstants.RELEASE_NOTES || WorkingDirectory == "Settings")
 			{
 				FolderBackgroundImageSource = null;
 				return;

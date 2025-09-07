@@ -96,8 +96,15 @@ class WebSocketClient(IpcClient):
                 data = json.loads(msg)
                 if "id" in data and data["id"] is not None:
                     self._responses[data["id"]] = data
-        except:
+        except (websockets.exceptions.ConnectionClosed, 
+                websockets.exceptions.ConnectionClosedOK,
+                asyncio.CancelledError):
+            # Expected disconnections - connection closed normally
             pass
+        except Exception as e:
+            print(f"[ERROR] Unexpected exception in receive loop: {e}")
+            import traceback
+            traceback.print_exc()
     
     async def call(self, method: str, params: Dict[str, Any] = None) -> Any:
         """Make an RPC call via WebSocket."""
