@@ -195,7 +195,6 @@ class NamedPipeClient(IpcClient):
         win32file.WriteFile(self.pipe_handle, length_bytes + json_bytes)
         
         # Read response (may get notifications first)
-        import time
         start_time = time.time()
         timeout = 5.0  # 5-second timeout
         
@@ -292,14 +291,48 @@ class UnifiedIpcTester:
     
     async def test_invalid_paths(self):
         """Test handling of invalid paths."""
-        # Non-existent path
+        # Test 1: Non-existent path should return successfully but indicate the path doesn't exist
         result = await self.client.call("navigate", {"path": "Z:\\NonExistent\\Path"})
-        # Should not throw, but may return error status
+        assert result is not None, "Navigate returned None for non-existent path"
+        assert isinstance(result, dict), f"Navigate should return dict, got {type(result)}"
+        # Should either return success status (navigated to closest valid parent) or indicate path issue
+        assert "status" in result, "Missing status field in navigation response"
+        assert result["status"] == "ok", "Navigation should handle non-existent paths gracefully"
         
-        # Very long path
-        long_path = "C:\\" + "\\VeryLongFolder" * 100
-        result = await self.client.call("navigate", {"path": long_path})
-        # Should handle gracefully
+        # Test 2: Very long path (exceeds Windows MAX_PATH)
+        long_path = "C:\\" + "\\VeryLongFolderName" * 50  # Creates path > 260 chars
+        assert len(long_path) > 260, "Test path should exceed Windows MAX_PATH limit"
+        
+        try:
+            result = await self.client.call("navigate", {"path": long_path})
+            # If it succeeds, verify the response structure
+            assert result is not None, "Navigate returned None for long path"
+            assert isinstance(result, dict), f"Navigate should return dict, got {type(result)}"
+            assert "status" in result, "Missing status field in response"
+            # The path should be normalized/truncated or handled appropriately
+            assert result["status"] == "ok", "Long path should be handled without error"
+        except RuntimeError as e:
+            # If it fails, ensure it's a proper JSON-RPC error
+            error_str = str(e)
+            assert "RPC error" in error_str, f"Expected RPC error format, got: {error_str}"
+            # Should contain either InvalidParams error or a descriptive message
+            assert any(x in error_str.lower() for x in ["invalid", "path", "long", "exceed"]), \
+                f"Error should describe the path issue, got: {error_str}"
+        
+        # Test 3: Path with invalid characters
+        invalid_char_path = "C:\\Invalid<>Path|Name?.txt"
+        try:
+            result = await self.client.call("navigate", {"path": invalid_char_path})
+            # Should handle gracefully even with invalid chars
+            assert result is not None, "Navigate returned None for path with invalid chars"
+            assert isinstance(result, dict), f"Navigate should return dict, got {type(result)}"
+            assert "status" in result, "Missing status field"
+        except RuntimeError as e:
+            # Verify proper error handling
+            error_str = str(e)
+            assert "RPC error" in error_str, f"Expected RPC error format, got: {error_str}"
+            assert any(x in error_str.lower() for x in ["invalid", "character", "path"]), \
+                f"Error should indicate invalid characters, got: {error_str}"
     
     async def test_metadata(self):
         """Test metadata retrieval."""
