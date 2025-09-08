@@ -104,12 +104,16 @@ namespace Files.App.Communication
                     try
                     {
                         File.WriteAllText(tmp, json);
-                        // Use File.Replace for atomic replacement (Windows-specific but this is a Windows app)
-                        // If destination doesn't exist, Replace will fail, so fall back to Move
-                        if (File.Exists(path))
-                            File.Replace(tmp, path, null); // null backup means no backup
-                        else
+                        // Try atomic move first (works if destination doesn't exist)
+                        try
+                        {
                             File.Move(tmp, path);
+                        }
+                        catch (IOException)
+                        {
+                            // If move failed because file exists, use Replace for atomic update
+                            File.Replace(tmp, path, null); // null backup means no backup
+                        }
                         Secure(path);
                     }
                     finally

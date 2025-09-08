@@ -13,13 +13,20 @@ namespace Files.App.Communication
     /// <summary>
     /// Routes IPC requests to appropriate shell adapters. No UI code.
     /// </summary>
-    public sealed class IpcCoordinator
+    public sealed partial class IpcCoordinator
     {
-        // Compiled regex patterns for stack trace sanitization (performance optimization)
-        private static readonly Regex FilePathRegex = new(@"[A-Z]:\\[^:]+\.cs:line \d+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-        private static readonly Regex GuidRegex = new(@"[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}", RegexOptions.Compiled);
-        private static readonly Regex Base64TokenRegex = new(@"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9_\-/+]{20,}={0,2}(?![A-Za-z0-9+/=_-])", RegexOptions.Compiled);
-        private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
+        // Source-generated regex patterns for stack trace sanitization (compile-time optimization for .NET 7+)
+        [GeneratedRegex(@"[A-Z]:\\[^:]+\.cs:line \d+", RegexOptions.IgnoreCase)]
+        private static partial Regex FilePathRegex();
+        
+        [GeneratedRegex(@"[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}")]
+        private static partial Regex GuidRegex();
+        
+        [GeneratedRegex(@"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9_\-/+]{20,}={0,2}(?![A-Za-z0-9+/=_-])")]
+        private static partial Regex Base64TokenRegex();
+        
+        [GeneratedRegex(@"\s+")]
+        private static partial Regex WhitespaceRegex();
         
         private readonly IIpcShellRegistry _registry;
         private readonly IAppCommunicationService _comm;
@@ -49,15 +56,15 @@ namespace Files.App.Communication
             var stack = ex.StackTrace ?? string.Empty;
             try
             {
-                // Use pre-compiled regex patterns for better performance
+                // Use source-generated regex patterns for better performance
                 // Remove absolute Windows file paths ending with .cs:line N
-                stack = FilePathRegex.Replace(stack, string.Empty);
+                stack = FilePathRegex().Replace(stack, string.Empty);
                 // Remove GUIDs
-                stack = GuidRegex.Replace(stack, string.Empty);
+                stack = GuidRegex().Replace(stack, string.Empty);
                 // Remove likely base64 tokens (length > 20, url safe or standard base64 charset)
-                stack = Base64TokenRegex.Replace(stack, "[redacted]");
+                stack = Base64TokenRegex().Replace(stack, "[redacted]");
                 // Collapse whitespace
-                stack = WhitespaceRegex.Replace(stack, " ");
+                stack = WhitespaceRegex().Replace(stack, " ");
                 // Keep it reasonably small
                 if (stack.Length > 300) stack = stack[..300] + "...";
             }

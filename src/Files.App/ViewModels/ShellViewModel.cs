@@ -1575,11 +1575,11 @@ namespace Files.App.ViewModels
 			if (path.Length > 0)
 			{
 				// Check for shell folder (starts with "::")
-				if (path.Length >= 2 && path[0] == ':' && path[1] == ':')
+				if (path.StartsWith("::", StringComparison.Ordinal))
 					return true;
 				
 				// Check for MTP device (starts with "mtp:")
-				if (path.Length >= 4 && path[0] == 'm' && path[1] == 't' && path[2] == 'p' && path[3] == ':')
+				if (path.StartsWith("mtp:", StringComparison.OrdinalIgnoreCase))
 					return true;
 			}
 
@@ -1782,9 +1782,9 @@ namespace Files.App.ViewModels
 			var isBoxFolder = CloudDrivesManager.Drives.FirstOrDefault(x => x.Text == "Box")?.Path?.TrimEnd('\\') is string boxFolder && path.StartsWith(boxFolder);
 			bool isWslDistro = path.StartsWith(@"\\wsl$\", StringComparison.OrdinalIgnoreCase) || path.StartsWith(@"\\wsl.localhost\", StringComparison.OrdinalIgnoreCase)
 				|| path.Equals(@"\\wsl$", StringComparison.OrdinalIgnoreCase) || path.Equals(@"\\wsl.localhost", StringComparison.OrdinalIgnoreCase);
-			// Optimized prefix checks using character comparison for better performance
-			bool isMtp = path.Length >= 4 && path[0] == 'm' && path[1] == 't' && path[2] == 'p' && path[3] == ':';
-			bool isShellFolder = path.Length >= 2 && path[0] == ':' && path[1] == ':';
+			// Check for special path prefixes
+			bool isMtp = path.StartsWith("mtp:", StringComparison.OrdinalIgnoreCase);
+			bool isShellFolder = path.StartsWith("::", StringComparison.Ordinal);
 			bool isNetwork = path.StartsWith(@"\\", StringComparison.Ordinal) &&
 				!isMtp &&
 				!isShellFolder &&

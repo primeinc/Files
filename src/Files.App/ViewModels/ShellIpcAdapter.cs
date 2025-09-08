@@ -100,12 +100,35 @@ namespace Files.App.ViewModels
 
         public async Task<object> GetMetadataAsync(List<string> paths)
         {
-            // GetFileMetadata uses file system, doesn't need UI thread
-            return await Task.Run(() =>
+            // Validate path count to prevent resource exhaustion
+            if (paths == null || paths.Count == 0)
             {
-                var metadata = GetFileMetadata(paths);
-                return new { items = metadata };
-            }).ConfigureAwait(false);
+                throw new JsonRpcException(JsonRpcException.InvalidParams, "No paths provided");
+            }
+            
+            if (paths.Count > IpcConfig.GetMetadataMaxItems)
+            {
+                throw new JsonRpcException(JsonRpcException.InvalidParams, 
+                    $"Too many paths requested ({paths.Count}). Maximum is {IpcConfig.GetMetadataMaxItems}");
+            }
+            
+            // Create timeout for metadata operations
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(IpcConfig.GetMetadataTimeoutSec));
+            
+            try
+            {
+                // GetFileMetadata uses file system, doesn't need UI thread
+                return await Task.Run(() =>
+                {
+                    var metadata = GetFileMetadata(paths, cts.Token);
+                    return new { items = metadata };
+                }, cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new JsonRpcException(JsonRpcException.InternalError, 
+                    $"Metadata operation timed out after {IpcConfig.GetMetadataTimeoutSec} seconds");
+            }
         }
 
         public async Task<object> ExecuteActionAsync(string actionId)
@@ -234,12 +257,14 @@ namespace Files.App.ViewModels
             }
         }
 
-        private List<ItemDto> GetFileMetadata(List<string> paths)
+        private List<ItemDto> GetFileMetadata(List<string> paths, CancellationToken cancellationToken)
         {
             var results = new List<ItemDto>();
             
             foreach (var path in paths)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                
                 try
                 {
                     var item = new ItemDto { Path = path, Name = Path.GetFileName(path) };

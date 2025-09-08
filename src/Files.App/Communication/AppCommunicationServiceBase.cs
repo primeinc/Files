@@ -307,12 +307,12 @@ namespace Files.App.Communication
         /// <summary>Dequeues payloads and invokes <see cref="SendToClientAsync"/>. Subclasses can reuse.</summary>
         protected async Task RunSendLoopAsync(ClientContext client)
         {
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+                Cancellation.Token,
+                client.Cancellation?.Token ?? CancellationToken.None);
+            
             try
             {
-                var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
-                    Cancellation.Token,
-                    client.Cancellation?.Token ?? CancellationToken.None);
-                
                 while (!linkedCts.Token.IsCancellationRequested)
                 {
                     // Async wait for messages - no polling needed
