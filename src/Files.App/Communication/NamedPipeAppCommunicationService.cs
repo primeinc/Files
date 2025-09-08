@@ -125,7 +125,6 @@ namespace Files.App.Communication
 
         private async Task RunReceiveLoopAsync(ClientContext client, NamedPipeServerStream server)
         {
-            var reader = new BinaryReader(server, Encoding.UTF8, leaveOpen: true);
             try
             {
                 while (server.IsConnected && !client.Cancellation!.IsCancellationRequested)
@@ -136,8 +135,9 @@ namespace Files.App.Communication
                     if (read != 4) throw new IOException("Incomplete length prefix");
 
                     var length = BinaryPrimitives.ReadInt32LittleEndian(lenBytes);
-                    if (length <= 0 || length > IpcConfig.NamedPipeMaxMessageBytes)
-                        break; // invalid / over limit
+                    // Check for negative, zero, excessive size, or potential integer overflow
+                    if (length <= 0 || length > IpcConfig.NamedPipeMaxMessageBytes || length > int.MaxValue / 2)
+                        break; // invalid / over limit / overflow protection
 
                     var payload = new byte[length];
                     int offset = 0;

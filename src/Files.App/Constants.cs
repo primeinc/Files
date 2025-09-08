@@ -309,8 +309,10 @@ namespace Files.App
 			public const string RELEASE_NOTES = "ReleaseNotes";
 			public const string TAG_PREFIX = "tag:";
 			public const string SHELL_FOLDER_UNC_PREFIX = @"\\SHELL\"; // virtual shell namespace root used internally
-			public const string MTP_DEVICE_PREFIX = @"\\?\"; // Win32 extended path / MTP devices
+			public const string EXTENDED_PATH_PREFIX = @"\\?\"; // Win32 extended-length path prefix (for paths >260 chars)
 			public const string DEVICE_NAMESPACE_PREFIX = @"\\.\"; // Win32 device namespace prefix
+			public const string MTP_PREFIX = "mtp:"; // Media Transfer Protocol devices (Android phones, cameras)
+			public const string SHELL_FOLDER_PREFIX = "::"; // Shell folder CLSID prefix
 		}
 	}
 }

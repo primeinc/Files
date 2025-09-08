@@ -1575,11 +1575,11 @@ namespace Files.App.ViewModels
 			if (path.Length > 0)
 			{
 				// Check for shell folder (starts with "::")
-				if (path.StartsWith("::", StringComparison.Ordinal))
+				if (path.StartsWith(Constants.PathValidationConstants.SHELL_FOLDER_PREFIX, StringComparison.Ordinal))
 					return true;
 				
 				// Check for MTP device (starts with "mtp:")
-				if (path.StartsWith("mtp:", StringComparison.OrdinalIgnoreCase))
+				if (path.StartsWith(Constants.PathValidationConstants.MTP_PREFIX, StringComparison.OrdinalIgnoreCase))
 					return true;
 			}
 
@@ -1783,8 +1783,8 @@ namespace Files.App.ViewModels
 			bool isWslDistro = path.StartsWith(@"\\wsl$\", StringComparison.OrdinalIgnoreCase) || path.StartsWith(@"\\wsl.localhost\", StringComparison.OrdinalIgnoreCase)
 				|| path.Equals(@"\\wsl$", StringComparison.OrdinalIgnoreCase) || path.Equals(@"\\wsl.localhost", StringComparison.OrdinalIgnoreCase);
 			// Check for special path prefixes
-			bool isMtp = path.StartsWith("mtp:", StringComparison.OrdinalIgnoreCase);
-			bool isShellFolder = path.StartsWith("::", StringComparison.Ordinal);
+			bool isMtp = path.StartsWith(Constants.PathValidationConstants.MTP_PREFIX, StringComparison.OrdinalIgnoreCase);
+			bool isShellFolder = path.StartsWith(Constants.PathValidationConstants.SHELL_FOLDER_PREFIX, StringComparison.Ordinal);
 			bool isNetwork = path.StartsWith(@"\\", StringComparison.Ordinal) &&
 				!isMtp &&
 				!isShellFolder &&

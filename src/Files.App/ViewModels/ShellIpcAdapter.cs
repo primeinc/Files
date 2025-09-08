@@ -244,7 +244,7 @@ namespace Files.App.ViewModels
             {
                 var p = Path.GetFullPath(raw);
                 // Reject device paths and odd prefixes
-                if (p.StartsWith(Constants.PathValidationConstants.MTP_DEVICE_PREFIX) || 
+                if (p.StartsWith(Constants.PathValidationConstants.EXTENDED_PATH_PREFIX) || 
                     p.StartsWith(Constants.PathValidationConstants.DEVICE_NAMESPACE_PREFIX))
                     return false;
 
