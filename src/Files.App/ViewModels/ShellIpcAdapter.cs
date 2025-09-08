@@ -183,7 +183,6 @@ namespace Files.App.ViewModels
             }
         }
 
-        // Handles selection change events and broadcasts them to IPC clients
         public async void OnSelectionChanged(IEnumerable<string> selectedPaths)
         {
             try

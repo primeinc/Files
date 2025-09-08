@@ -300,7 +300,7 @@ namespace Files.App.ViewModels
 		public async Task<FilesystemResult<StorageFileWithPath>> GetFileWithPathFromPathAsync(string value, CancellationToken cancellationToken = default)
 		{
 			await getFileOrFolderSemaphore.WaitAsync(cancellationToken);
-			try
+		try
 			{
 				return await FilesystemTasks.Wrap(() => StorageFileExtensions.DangerousGetFileWithPathFromPathAsync(value, workingRoot, currentStorageFolder));
 			}
@@ -500,7 +500,7 @@ namespace Files.App.ViewModels
 				if (value)
 				{
 					folderSettings.DirectorySortOption = SortOption.SyncStatus;
-					OnPropertyChanged(nameof(IsSortedBySyncStatus));
+				 OnPropertyChanged(nameof(IsSortedBySyncStatus));
 				}
 			}
 		}
@@ -1620,7 +1620,7 @@ namespace Files.App.ViewModels
 			return exists;
 		}
 
-		public void RefreshItems(string? previousDir, Action postLoadCallback = null)
+		public void RefreshItems(string? previousDir = null, Action postLoadCallback = null)
 		{
 			RapidAddItemsToCollectionAsync(WorkingDirectory, previousDir, postLoadCallback);
 		}
@@ -2587,8 +2587,6 @@ namespace Files.App.ViewModels
 			{
 				// Prevent disposed cancellation token
 			}
-
-			Debug.WriteLine("aProcessQueueAction done: {0}", rand);
 		}
 
 		public Task<ListedItem> AddFileOrFolderFromShellFile(ShellFileItem item)
