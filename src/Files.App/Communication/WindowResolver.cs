@@ -1,10 +1,11 @@
 using Microsoft.Extensions.Logging;
 using System;
+using Files.App.Views;
 
 namespace Files.App.Communication
 {
     /// <summary>
-    /// Default implementation that returns the main window ID.
+    /// Resolves the active window ID for IPC routing.
     /// </summary>
     public sealed class WindowResolver : IWindowResolver
     {
@@ -17,12 +18,27 @@ namespace Files.App.Communication
 
         public uint GetActiveWindowId()
         {
-            // For now, return a default window ID
-            // In a real implementation, this would track the actual active window
-            // via AppWindow.GetFromWindowId or similar Windows API
-            const uint defaultWindowId = 1;
-            _logger.LogDebug("Returning default window ID: {WindowId}", defaultWindowId);
-            return defaultWindowId;
+            try
+            {
+                // Get the window ID from the current MainWindow's AppWindow
+                // This works because Files is typically single-window (main window)
+                // For multi-window support, would need to track the focused window
+                var windowId = MainWindow.Instance?.AppWindow?.Id.Value is ulong id ? (uint)id : 0u;
+                
+                if (windowId == 0)
+                {
+                    _logger.LogWarning("Could not determine active window ID, using default");
+                    return 1; // Default fallback
+                }
+                
+                _logger.LogDebug("Resolved active window ID: {WindowId}", windowId);
+                return windowId;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to get active window ID");
+                return 1; // Default fallback on error
+            }
         }
     }
 }

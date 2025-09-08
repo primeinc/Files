@@ -145,13 +145,13 @@ namespace Files.App.Communication
                     if (result.MessageType != WebSocketMessageType.Text)
                         continue;
 
-                    received += result.Count;
-                    if (received > IpcConfig.WebSocketMaxMessageBytes)
+                    if (received + result.Count > IpcConfig.WebSocketMaxMessageBytes)
                     {
                         Logger.LogWarning("Client {ClientId} exceeded max message size, disconnecting", client.Id);
                         break;
                     }
                     builder.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
+                    received += result.Count;
                     if (result.EndOfMessage)
                     {
                         var text = builder.ToString();

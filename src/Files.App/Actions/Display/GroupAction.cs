@@ -531,8 +531,7 @@ namespace Files.App.Actions
 
 		public Task ExecuteAsync(object? parameter = null)
 		{
-			// Toggle based on current group direction, not sort direction
-			context.GroupDirection = context.GroupDirection is SortDirection.Descending ? SortDirection.Ascending : SortDirection.Descending;
+			context.GroupDirection = context.SortDirection is SortDirection.Descending ? SortDirection.Ascending : SortDirection.Descending;
 			LayoutHelpers.UpdateOpenTabsPreferences();
 
 			return Task.CompletedTask;

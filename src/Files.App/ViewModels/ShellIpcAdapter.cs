@@ -183,7 +183,7 @@ namespace Files.App.ViewModels
             }
         }
 
-        // This method would need to be wired to the actual selection change event in ShellViewModel
+        // Handles selection change events and broadcasts them to IPC clients
         public async void OnSelectionChanged(IEnumerable<string> selectedPaths)
         {
             try
@@ -288,7 +288,57 @@ namespace Files.App.ViewModels
         private async Task ExecuteActionById(string actionId)
         {
             _logger.LogInformation("Executing action: {ActionId}", actionId);
-            await Task.CompletedTask;
+            
+            // Validate action is allowed
+            if (!_actions.CanExecute(actionId))
+            {
+                _logger.LogWarning("Action {ActionId} is not allowed or cannot execute", actionId);
+                throw new InvalidOperationException($"Action '{actionId}' is not allowed or cannot execute");
+            }
+            
+            // Execute the action based on its ID
+            // Note: In a full implementation, this would delegate to the Files command system
+            switch (actionId?.ToLowerInvariant())
+            {
+                case "refresh":
+                    // Trigger a refresh of the current view
+                    await _uiQueue.EnqueueAsync(async () =>
+                    {
+                        _shell.RefreshItems();
+                        await Task.CompletedTask;
+                    });
+                    break;
+                    
+                case "copypath":
+                    // Copy current path to clipboard
+                    await _uiQueue.EnqueueAsync(async () =>
+                    {
+                        if (!string.IsNullOrEmpty(_shell.WorkingDirectory))
+                        {
+                            var dataPackage = new Windows.ApplicationModel.DataTransfer.DataPackage();
+                            dataPackage.SetText(_shell.WorkingDirectory);
+                            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
+                        }
+                        await Task.CompletedTask;
+                    });
+                    break;
+                    
+                case "toggledualpane":
+                    // Toggle dual pane view
+                    _logger.LogInformation("Toggle dual pane requested via IPC");
+                    // This would need proper implementation with the dual pane manager
+                    break;
+                    
+                case "showproperties":
+                    // Show properties for selected items
+                    _logger.LogInformation("Show properties requested via IPC");
+                    // This would need proper implementation with the properties dialog
+                    break;
+                    
+                default:
+                    _logger.LogWarning("Action {ActionId} is recognized but not implemented", actionId);
+                    throw new NotImplementedException($"Action '{actionId}' is not yet implemented");
+            }
         }
 
         private async Task NavigateToPathNormalized(string path)

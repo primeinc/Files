@@ -1571,10 +1571,16 @@ namespace Files.App.ViewModels
 		private bool IsPathValid(string path)
 		{
 			// Virtual paths are always valid (no file system check needed)
-			if (path.StartsWith(Constants.PathValidationConstants.SHELL_FOLDER_UNC_PREFIX, StringComparison.Ordinal) ||
-			    path.StartsWith(Constants.PathValidationConstants.MTP_DEVICE_PREFIX, StringComparison.Ordinal))
+			// Optimize: Quick length check first to avoid unnecessary StartsWith calls
+			if (path.Length > 0)
 			{
-				return true;
+				// Check for shell folder (starts with "::")
+				if (path.Length >= 2 && path[0] == ':' && path[1] == ':')
+					return true;
+				
+				// Check for MTP device (starts with "mtp:")
+				if (path.Length >= 4 && path[0] == 'm' && path[1] == 't' && path[2] == 'p' && path[3] == ':')
+					return true;
 			}
 
 			var now = DateTime.UtcNow;
@@ -1776,8 +1782,9 @@ namespace Files.App.ViewModels
 			var isBoxFolder = CloudDrivesManager.Drives.FirstOrDefault(x => x.Text == "Box")?.Path?.TrimEnd('\\') is string boxFolder && path.StartsWith(boxFolder);
 			bool isWslDistro = path.StartsWith(@"\\wsl$\", StringComparison.OrdinalIgnoreCase) || path.StartsWith(@"\\wsl.localhost\", StringComparison.OrdinalIgnoreCase)
 				|| path.Equals(@"\\wsl$", StringComparison.OrdinalIgnoreCase) || path.Equals(@"\\wsl.localhost", StringComparison.OrdinalIgnoreCase);
-			bool isMtp = path.StartsWith(Constants.PathValidationConstants.MTP_DEVICE_PREFIX, StringComparison.Ordinal);
-			bool isShellFolder = path.StartsWith(Constants.PathValidationConstants.SHELL_FOLDER_UNC_PREFIX, StringComparison.Ordinal);
+			// Optimized prefix checks using character comparison for better performance
+			bool isMtp = path.Length >= 4 && path[0] == 'm' && path[1] == 't' && path[2] == 'p' && path[3] == ':';
+			bool isShellFolder = path.Length >= 2 && path[0] == ':' && path[1] == ':';
 			bool isNetwork = path.StartsWith(@"\\", StringComparison.Ordinal) &&
 				!isMtp &&
 				!isShellFolder &&

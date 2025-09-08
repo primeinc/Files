@@ -15,6 +15,12 @@ namespace Files.App.Communication
     /// </summary>
     public sealed class IpcCoordinator
     {
+        // Compiled regex patterns for stack trace sanitization (performance optimization)
+        private static readonly Regex FilePathRegex = new(@"[A-Z]:\\[^:]+\.cs:line \d+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex GuidRegex = new(@"[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}", RegexOptions.Compiled);
+        private static readonly Regex Base64TokenRegex = new(@"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9_\-/+]{20,}={0,2}(?![A-Za-z0-9+/=_-])", RegexOptions.Compiled);
+        private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
+        
         private readonly IIpcShellRegistry _registry;
         private readonly IAppCommunicationService _comm;
         private readonly IWindowResolver _windows;
@@ -43,14 +49,15 @@ namespace Files.App.Communication
             var stack = ex.StackTrace ?? string.Empty;
             try
             {
+                // Use pre-compiled regex patterns for better performance
                 // Remove absolute Windows file paths ending with .cs:line N
-                stack = Regex.Replace(stack, @"[A-Z]:\\[^:]+\.cs:line \d+", string.Empty, RegexOptions.IgnoreCase);
+                stack = FilePathRegex.Replace(stack, string.Empty);
                 // Remove GUIDs
-                stack = Regex.Replace(stack, @"[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}", string.Empty);
+                stack = GuidRegex.Replace(stack, string.Empty);
                 // Remove likely base64 tokens (length > 20, url safe or standard base64 charset)
-                stack = Regex.Replace(stack, @"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9_\-/+]{20,}={0,2}(?![A-Za-z0-9+/=_-])", "[redacted]");
+                stack = Base64TokenRegex.Replace(stack, "[redacted]");
                 // Collapse whitespace
-                stack = Regex.Replace(stack, @"\s+", " ");
+                stack = WhitespaceRegex.Replace(stack, " ");
                 // Keep it reasonably small
                 if (stack.Length > 300) stack = stack[..300] + "...";
             }
