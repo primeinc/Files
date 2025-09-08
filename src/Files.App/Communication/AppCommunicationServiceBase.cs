@@ -80,7 +80,7 @@ namespace Files.App.Communication
             }
             catch (Exception ex)
             {
-                Logger.LogError(ex, "Failed starting transport {Service}", GetType().Name);
+                Logger.LogError(ex, "Failed starting transport {Service}: {Message}", GetType().Name, ex.Message);
                 throw;
             }
         }
@@ -97,7 +97,7 @@ namespace Files.App.Communication
             }
             catch (Exception ex)
             {
-                Logger.LogWarning(ex, "Errors stopping {Service}", GetType().Name);
+                Logger.LogWarning(ex, "Errors stopping {Service}: {Message}", GetType().Name, ex.Message);
             }
             finally
             {
@@ -170,7 +170,8 @@ namespace Files.App.Communication
             }
             catch (Exception ex)
             {
-                Logger.LogError(ex, "Handler error for method {Method}", message.Method);
+                Logger.LogError(ex, "Handler error for method {Method} from client {ClientId}: {Message}", 
+                    message.Method, client.Id, ex.Message);
             }
         }
 
@@ -211,7 +212,8 @@ namespace Files.App.Communication
             }
             catch (Exception ex)
             {
-                Logger.LogError(ex, "Handshake failure for client {ClientId}", client.Id);
+                Logger.LogError(ex, "Handshake failure for client {ClientId} - Token validation failed: {Message}", 
+                    client.Id, ex.Message);
             }
             return true;
         }
@@ -230,7 +232,8 @@ namespace Files.App.Communication
             }
             catch (Exception ex)
             {
-                Logger.LogDebug(ex, "Failed enqueue response to {Client}", client.Id);
+                Logger.LogDebug(ex, "Failed enqueue response to {Client} - Queue full or client disconnected: {Message}", 
+                    client.Id, ex.Message);
             }
             return Task.CompletedTask;
         }
@@ -247,6 +250,12 @@ namespace Files.App.Communication
 
             var json = notification.ToJson();
             var method = notification.Method;
+            
+            // O(n) iteration is acceptable here because:
+            // 1. Broadcasts are infrequent (navigation changes, selections)
+            // 2. Client count is typically small (<10 concurrent connections)
+            // 3. Alternative designs (pub/sub, selective broadcast) add complexity without measurable benefit
+            // 4. Each client operation is O(1) with early-exit conditions
             foreach (var c in Clients.Values)
             {
                 if (!c.IsAuthenticated) continue;
@@ -280,6 +289,12 @@ namespace Files.App.Communication
             if (!_started || Cancellation.IsCancellationRequested)
                 return;
             var cutoff = DateTime.UtcNow - TimeSpan.FromMinutes(5);
+            
+            // O(n) iteration is acceptable for cleanup because:
+            // 1. Runs every 60 seconds (infrequent)
+            // 2. Client count remains small in practice
+            // 3. Removing stale clients prevents memory leaks
+            // 4. Cannot use LINQ ToArray() as it would prevent removal during iteration
             foreach (var kv in Clients)
             {
                 var c = kv.Value;

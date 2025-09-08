@@ -309,6 +309,7 @@ namespace Files.App
 			public const string SHELL_PREFIX = "shell:";
 			public const string HOME_PREFIX = "Home";
 			public const string RELEASE_NOTES = "ReleaseNotes";
+			public const string SETTINGS_PREFIX = "Settings";
 			public const string TAG_PREFIX = "tag:";
 			public const string SHELL_FOLDER_UNC_PREFIX = @"\\SHELL\"; // virtual shell namespace root used internally
 			public const string EXTENDED_PATH_PREFIX = @"\\?\"; // Win32 extended-length path prefix (for paths >260 chars)

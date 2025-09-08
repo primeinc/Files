@@ -14,7 +14,14 @@ using Files.App.Data.Commands;
 
 namespace Files.App.ViewModels
 {
-    // Adapter with strict allow list, path normalization, selection cap and structured errors.
+    /// <summary>
+    /// Adapter that bridges IPC requests to shell-specific operations.
+    /// Provides safe, normalized access to file explorer functionality with:
+    /// - Strict path validation and normalization
+    /// - Selection notification throttling (capped at 200 items)
+    /// - UI thread marshaling for WinUI operations
+    /// - Structured error responses for IPC clients
+    /// </summary>
     public sealed class ShellIpcAdapter
     {
         private readonly ShellViewModel _shell;

@@ -3,6 +3,7 @@ using Files.App.Data.Contracts;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Files.App.Communication
@@ -100,11 +101,45 @@ namespace Files.App.Communication
                     // Focus the shell's UI element to make it the active pane
                     if (targetShell is Microsoft.UI.Xaml.UIElement uiElement)
                     {
-                        uiElement.Focus(Microsoft.UI.Xaml.FocusState.Programmatic);
                         shouldRestoreFocus = true;
                         
-                        // Allow focus change to propagate through UI framework
-                        await Task.Delay(50);
+                        // Wait for focus to complete using event-driven approach
+                        var focusCompleted = new TaskCompletionSource<bool>();
+                        
+                        void OnGotFocus(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+                        {
+                            focusCompleted.TrySetResult(true);
+                        }
+                        
+                        uiElement.GotFocus += OnGotFocus;
+                        try
+                        {
+                            var focusResult = uiElement.Focus(Microsoft.UI.Xaml.FocusState.Programmatic);
+                            if (!focusResult)
+                            {
+                                _logger.LogWarning("Focus() returned false for shell {ShellId}, action may fail", 
+                                    targetShell.GetHashCode());
+                            }
+                            
+                            // Wait for focus event with timeout (500ms should be plenty even on slow systems)
+                            // If focus completes faster, we continue immediately
+                            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+                            try
+                            {
+                                await focusCompleted.Task.WaitAsync(cts.Token);
+                                _logger.LogDebug("Focus completed for shell {ShellId}", targetShell.GetHashCode());
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                _logger.LogWarning("Focus did not complete within timeout for shell {ShellId}", 
+                                    targetShell.GetHashCode());
+                                // Continue anyway - focus might still be processing
+                            }
+                        }
+                        finally
+                        {
+                            uiElement.GotFocus -= OnGotFocus;
+                        }
                     }
                 }
             }
@@ -113,8 +148,33 @@ namespace Files.App.Communication
             {
                 if (!command.IsExecutable)
                 {
-                    _logger.LogWarning("Command '{CommandCode}' is not executable in current context", commandCode);
-                    throw new InvalidOperationException($"Command '{commandCode}' cannot be executed in the current context");
+                    // Gather context information to help diagnose why the command isn't executable
+                    var contextInfo = new System.Text.StringBuilder();
+                    
+                    if (targetShell != null)
+                    {
+                        contextInfo.AppendLine($"Target Shell: {targetShell.GetHashCode()}");
+                        contextInfo.AppendLine($"Is Current Pane: {targetShell.IsCurrentPane}");
+                        contextInfo.AppendLine($"Page Type: {targetShell.CurrentPageType?.Name ?? "null"}");
+                        
+                        if (targetShell.ShellViewModel != null)
+                        {
+                            contextInfo.AppendLine($"Working Directory: {targetShell.ShellViewModel.WorkingDirectory ?? "null"}");
+                            contextInfo.AppendLine($"Has Selection: {targetShell.SlimContentPage?.SelectedItems?.Count > 0}");
+                        }
+                    }
+                    else
+                    {
+                        contextInfo.AppendLine("Target Shell: null");
+                    }
+                    
+                    _logger.LogWarning("Command '{CommandCode}' is not executable. Context: {Context}", 
+                        commandCode, contextInfo.ToString());
+                    
+                    throw new InvalidOperationException(
+                        $"Command '{commandCode}' cannot be executed in the current context. " +
+                        $"Page type: {targetShell?.CurrentPageType?.Name ?? "unknown"}, " +
+                        $"Has selection: {targetShell?.SlimContentPage?.SelectedItems?.Count > 0}");
                 }
 
                 await command.ExecuteAsync();
@@ -131,7 +191,41 @@ namespace Files.App.Communication
                     
                     if (previousActivePane is Microsoft.UI.Xaml.UIElement previousUiElement)
                     {
-                        previousUiElement.Focus(Microsoft.UI.Xaml.FocusState.Programmatic);
+                        // Use same event-driven approach for restore
+                        var restoreCompleted = new TaskCompletionSource<bool>();
+                        
+                        void OnRestoreFocus(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+                        {
+                            restoreCompleted.TrySetResult(true);
+                        }
+                        
+                        previousUiElement.GotFocus += OnRestoreFocus;
+                        try
+                        {
+                            var restoreResult = previousUiElement.Focus(Microsoft.UI.Xaml.FocusState.Programmatic);
+                            if (!restoreResult)
+                            {
+                                _logger.LogWarning("Focus restore failed for pane {PaneId}", 
+                                    previousActivePane.GetHashCode());
+                            }
+                            
+                            // Shorter timeout for restore since it's less critical
+                            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+                            try
+                            {
+                                await restoreCompleted.Task.WaitAsync(cts.Token);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                // Not critical if restore times out
+                                _logger.LogDebug("Focus restore timed out for pane {PaneId}", 
+                                    previousActivePane.GetHashCode());
+                            }
+                        }
+                        finally
+                        {
+                            previousUiElement.GotFocus -= OnRestoreFocus;
+                        }
                     }
                 }
             }

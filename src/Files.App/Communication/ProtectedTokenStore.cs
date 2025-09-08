@@ -19,19 +19,29 @@ namespace Files.App.Communication
 
 		public static bool IsEnabled()
 		{
-			// Explicit setting wins if present
+			// Check if user explicitly enabled it
 			if (Settings.Values.TryGetValue(KEY_ENABLED, out var v) && v is bool b)
+			{
+				// User explicitly set the preference - no warning needed
 				return b;
+			}
 
 			// Environment variable override (non persisted) for test/automation scenarios
 			var env = Environment.GetEnvironmentVariable(ENV_ENABLE);
 			if (!string.IsNullOrEmpty(env) && (string.Equals(env, "1", StringComparison.OrdinalIgnoreCase) || string.Equals(env, "true", StringComparison.OrdinalIgnoreCase)))
+			{
+				// Enabled via environment variable for testing - no warning needed
 				return true;
+			}
 
-			// Log a warning if enabled in debug mode, but don't enable by default
+			// Check if we're auto-enabling ONLY because of debug mode
+			// This is the security risk - IPC enabled without user consent
 			if (System.Diagnostics.Debugger.IsAttached && IpcConfig.EnableIpcInDebugMode)
 			{
-				App.Logger?.LogWarning("?? IPC enabled in DEBUG mode - security risk");
+				// Log once that IPC is auto-enabled for debugging
+				App.Logger?.LogWarning("[IPC] Auto-enabled in debug mode (not user-configured)");
+				System.Diagnostics.Debug.WriteLine("[IPC] Auto-enabled for debugging - tokens readable by other processes");
+				
 				return true;
 			}
 

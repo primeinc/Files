@@ -15,15 +15,28 @@ namespace Files.App.Communication
     /// </summary>
     public sealed partial class IpcCoordinator
     {
+        // Standard error codes for consistent error handling
+        private const int ERROR_NO_SHELL = -32001;  // No shell available to handle request
+        private const int ERROR_DISPATCH = -32002;  // Failed to dispatch to adapter
+        private const int ERROR_SHELL_LIST = -32003; // Failed to enumerate shells
+        
         // Source-generated regex patterns for stack trace sanitization (compile-time optimization for .NET 7+)
-        [GeneratedRegex(@"[A-Z]:\\[^:]+\.cs:line \d+", RegexOptions.IgnoreCase)]
+        // Matches Windows paths (C:\...\file.cs:line N), Linux/Mac paths (/home/.../file.cs:line N), and UNC paths
+        [GeneratedRegex(@"(?:[A-Z]:\\[^:""<>|]+\.cs:line \d+|/[^:""<>|]+\.cs:line \d+|\\\\[^\\:""<>|]+\\[^:""<>|]+\.cs:line \d+)", RegexOptions.IgnoreCase)]
         private static partial Regex FilePathRegex();
         
-        [GeneratedRegex(@"[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}")]
+        // Matches GUIDs in standard format
+        [GeneratedRegex(@"\b[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}\b")]
         private static partial Regex GuidRegex();
         
-        [GeneratedRegex(@"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9_\-/+]{20,}={0,2}(?![A-Za-z0-9+/=_-])")]
+        // Matches potential base64 tokens (JWT segments, API keys, etc.) - more specific pattern
+        // Looks for base64-like strings that are 20+ chars, bounded by non-base64 chars
+        [GeneratedRegex(@"\b(?:ey[A-Za-z0-9_-]{18,}|[A-Za-z0-9+/]{32,}={0,2}|[A-Za-z0-9_-]{32,})\b")]
         private static partial Regex Base64TokenRegex();
+        
+        // Matches method signatures with namespaces for sanitization
+        [GeneratedRegex(@"\bat [A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+\.")]
+        private static partial Regex MethodSignatureRegex();
         
         [GeneratedRegex(@"\s+")]
         private static partial Regex WhitespaceRegex();
@@ -53,24 +66,87 @@ namespace Files.App.Communication
 
         private static string SanitizeException(Exception ex)
         {
+            // Sanitize the exception message first to remove any sensitive data
+            var sanitizedMessage = SanitizeMessage(ex.Message);
+            
+            // Early return for exceptions we don't want to expose stack traces for
+            var sensitiveExceptions = new[] { "UnauthorizedAccessException", "SecurityException", "CryptographicException" };
+            if (sensitiveExceptions.Contains(ex.GetType().Name))
+            {
+                return $"{ex.GetType().Name}: Access denied";
+            }
+            
             var stack = ex.StackTrace ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(stack))
+            {
+                return $"{ex.GetType().Name}: {sanitizedMessage}";
+            }
+            
             try
             {
-                // Use source-generated regex patterns for better performance
-                // Remove absolute Windows file paths ending with .cs:line N
-                stack = FilePathRegex().Replace(stack, string.Empty);
-                // Remove GUIDs
-                stack = GuidRegex().Replace(stack, string.Empty);
-                // Remove likely base64 tokens (length > 20, url safe or standard base64 charset)
-                stack = Base64TokenRegex().Replace(stack, "[redacted]");
-                // Collapse whitespace
-                stack = WhitespaceRegex().Replace(stack, " ");
-                // Keep it reasonably small
-                if (stack.Length > Constants.IpcSettings.StackTraceSanitizationMaxLength) 
-                    stack = stack[..Constants.IpcSettings.StackTraceSanitizationMaxLength] + "...";
+                // Remove all file paths (Windows, Linux, Mac, UNC) - these reveal directory structure
+                stack = FilePathRegex().Replace(stack, "[path]:[line]");
+                
+                // Remove GUIDs which might be correlation IDs or sensitive identifiers
+                stack = GuidRegex().Replace(stack, "[guid]");
+                
+                // Remove potential tokens (JWTs start with 'ey', API keys, base64 strings)
+                stack = Base64TokenRegex().Replace(stack, "[token]");
+                
+                // Sanitize method signatures to remove full namespace paths
+                stack = MethodSignatureRegex().Replace(stack, "at [namespace].");
+                
+                // Remove any remaining absolute paths that might have been missed
+                stack = Regex.Replace(stack, @"[A-Z]:\\[^\s]+", "[path]", RegexOptions.IgnoreCase);
+                stack = Regex.Replace(stack, @"/(?:home|usr|var|opt|Users|Applications)/[^\s]+", "[path]");
+                stack = Regex.Replace(stack, @"\\\\[^\\\s]+\\[^\s]+", "[unc-path]");
+                
+                // Remove port numbers which might reveal internal infrastructure
+                stack = Regex.Replace(stack, @":\d{2,5}\b", ":[port]");
+                
+                // Remove IP addresses
+                stack = Regex.Replace(stack, @"\b(?:\d{1,3}\.){3}\d{1,3}\b", "[ip]");
+                
+                // Collapse excessive whitespace
+                stack = WhitespaceRegex().Replace(stack, " ").Trim();
+                
+                // Truncate if too long, but keep it useful for debugging
+                if (stack.Length > Constants.IpcSettings.StackTraceSanitizationMaxLength)
+                {
+                    // Try to keep the most relevant part (usually the top of the stack)
+                    stack = stack[..Constants.IpcSettings.StackTraceSanitizationMaxLength] + "... [truncated]";
+                }
             }
-            catch { stack = string.Empty; }
-            return ex.GetType().Name + ": " + ex.Message + (string.IsNullOrEmpty(stack) ? string.Empty : "; stack: " + stack);
+            catch
+            {
+                // If sanitization fails, don't expose the original stack
+                stack = "[sanitization failed]";
+            }
+            
+            return $"{ex.GetType().Name}: {sanitizedMessage}" + 
+                   (string.IsNullOrWhiteSpace(stack) ? string.Empty : $" | Stack: {stack}");
+        }
+        
+        private static string SanitizeMessage(string message)
+        {
+            if (string.IsNullOrWhiteSpace(message))
+                return "[no message]";
+            
+            // Remove file paths from messages
+            message = Regex.Replace(message, @"[A-Z]:\\[^\s""]+", "[path]", RegexOptions.IgnoreCase);
+            message = Regex.Replace(message, @"/(?:home|usr|var|opt|Users|Applications)/[^\s""]+", "[path]");
+            
+            // Remove potential tokens from error messages
+            message = Regex.Replace(message, @"\b[A-Za-z0-9+/=_-]{32,}\b", "[token]");
+            
+            // Remove GUIDs
+            message = Regex.Replace(message, @"\b[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}\b", "[guid]");
+            
+            // Limit message length
+            if (message.Length > 200)
+                message = message[..197] + "...";
+            
+            return message;
         }
 
         private async Task HandleRequestAsync(ClientContext client, JsonRpcMessage request)
@@ -91,7 +167,7 @@ namespace Files.App.Communication
                     if (!request.IsNotification)
                     {
                         await _comm.SendResponseAsync(client, 
-                            JsonRpcMessage.MakeError(request.Id, JsonRpcException.InternalError, 
+                            JsonRpcMessage.MakeError(request.Id, ERROR_NO_SHELL, 
                                 $"No shell available to handle request. Registered shells: {shellCount}"));
                     }
                     return;
@@ -130,7 +206,11 @@ namespace Files.App.Communication
                 if (!request.IsNotification)
                 {
                     var sanitized = SanitizeException(ex);
-                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, JsonRpcException.InternalError, sanitized));
+                    
+                    // Use specific error code if it's a dispatch failure
+                    var errorCode = ex is InvalidOperationException ? ERROR_DISPATCH : JsonRpcException.InternalError;
+                    
+                    await _comm.SendResponseAsync(client, JsonRpcMessage.MakeError(request.Id, errorCode, sanitized));
                 }
             }
         }
@@ -259,8 +339,8 @@ namespace Files.App.Communication
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to list shells");
-                throw new JsonRpcException(JsonRpcException.InternalError, "Failed to enumerate shells");
+                _logger.LogError(ex, "Failed to list shells: {ExceptionType}", ex.GetType().Name);
+                throw new JsonRpcException(ERROR_SHELL_LIST, $"Failed to enumerate shells: {ex.GetType().Name}");
             }
         }
 
@@ -366,6 +446,7 @@ namespace Files.App.Communication
                     throw new JsonRpcException(JsonRpcException.InvalidParams, "Missing actionId parameter");
 
                 default:
+                    _logger.LogWarning("Unknown IPC method requested: {Method}", request.Method);
                     throw new JsonRpcException(JsonRpcException.MethodNotFound, 
                         $"Method '{request.Method}' not implemented");
             }

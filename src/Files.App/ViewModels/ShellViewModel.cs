@@ -1606,11 +1606,16 @@ namespace Files.App.ViewModels
 			// Clean up old cache entries deterministically when threshold exceeded
 			if (pathValidationCache.Count > PathCacheCleanupThreshold)
 			{
+				// CRITICAL: Take a snapshot to avoid "Collection was modified" exceptions
+				// ConcurrentDictionary enumeration is not thread-safe during concurrent modifications
 				var expiredKeys = pathValidationCache
+					.ToArray()  // Snapshot prevents crashes from concurrent modifications
 					.Where(kvp => (now - kvp.Value.checkedAt).TotalSeconds > PathCacheExpirationSeconds * 2)
 					.Select(kvp => kvp.Key)
-					.Take(PathCacheCleanupBatchSize);
+					.Take(PathCacheCleanupBatchSize)
+					.ToList();  // Materialize before removal to avoid deferred execution issues
 
+				// Safe to remove after snapshot and materialization
 				foreach (var key in expiredKeys)
 				{
 					pathValidationCache.TryRemove(key, out _);
@@ -2064,7 +2069,9 @@ namespace Files.App.ViewModels
 
 		public void CheckForBackgroundImage()
 		{
-			if (WorkingDirectory == Constants.PathValidationConstants.HOME_PREFIX || WorkingDirectory == Constants.PathValidationConstants.RELEASE_NOTES || WorkingDirectory == "Settings")
+			if (WorkingDirectory == Constants.PathValidationConstants.HOME_PREFIX || 
+			    WorkingDirectory == Constants.PathValidationConstants.RELEASE_NOTES || 
+			    WorkingDirectory == Constants.PathValidationConstants.SETTINGS_PREFIX)
 			{
 				FolderBackgroundImageSource = null;
 				return;
