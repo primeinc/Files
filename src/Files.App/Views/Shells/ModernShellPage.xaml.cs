@@ -80,8 +80,25 @@ namespace Files.App.Views.Shells
 				var tabId = Guid.NewGuid();
 				
 				// Get the window ID from the current MainWindow's AppWindow
-				// Extract the underlying numeric value (ulong) and fall back to 0 if unavailable, then cast to uint
-				var windowId = MainWindow.Instance?.AppWindow?.Id.Value is ulong id ? (uint)id : 0u;
+				// Extract the underlying numeric value (ulong) with overflow protection
+				uint windowId;
+				if (MainWindow.Instance?.AppWindow?.Id.Value is ulong rawId)
+				{
+					if (rawId <= uint.MaxValue)
+					{
+						windowId = (uint)rawId;
+					}
+					else
+					{
+						// Log a warning if the window ID exceeds uint.MaxValue to prevent silent data loss
+						App.Logger.LogWarning("Window ID ({RawId}) exceeds uint.MaxValue; falling back to 0.", rawId);
+						windowId = 0u;
+					}
+				}
+				else
+				{
+					windowId = 0u;
+				}
 
 				_ipcBootstrapper = new ShellIpcBootstrapper(
 					registry,

@@ -20,10 +20,27 @@ namespace Files.App.Communication
         {
             try
             {
-                // Get the window ID from the current MainWindow's AppWindow
+                // Get the window ID from the current MainWindow's AppWindow with overflow protection
                 // This works because Files is typically single-window (main window)
                 // For multi-window support, would need to track the focused window
-                var windowId = MainWindow.Instance?.AppWindow?.Id.Value is ulong id ? (uint)id : 0u;
+                uint windowId;
+                if (MainWindow.Instance?.AppWindow?.Id.Value is ulong rawId)
+                {
+                    if (rawId <= uint.MaxValue)
+                    {
+                        windowId = (uint)rawId;
+                    }
+                    else
+                    {
+                        // Log a warning as this could lead to incorrect window identification
+                        _logger.LogWarning("Window ID ({RawId}) exceeds uint.MaxValue and will be truncated to 0.", rawId);
+                        windowId = 0u;
+                    }
+                }
+                else
+                {
+                    windowId = 0u;
+                }
                 
                 if (windowId == 0)
                 {

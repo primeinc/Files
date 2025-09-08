@@ -424,8 +424,11 @@ namespace Files.App.Helpers
 			Debug.WriteLine(formattedException.ToString());
 
 			// Only break if a debugger is attached to avoid prompting end users.
+			// Wrap in DEBUG directive to prevent breaking in release builds
+#if DEBUG
 			if (Debugger.IsAttached)
 				Debugger.Break();
+#endif
 
 			// Save the current tab list in case it was overwritten by another instance
 			SaveSessionTabs();

@@ -1566,8 +1566,14 @@ namespace Files.App.ViewModels
 			return groupImage;
 		}
 
-		// Optimized path validation with caching to minimize file system calls
-		// Cache entries expire after 2 seconds to handle file system changes
+		/// <summary>
+		/// Validates whether the specified path exists, using an optimized caching mechanism to minimize file system calls.
+		/// Virtual paths (e.g., shell folders and MTP devices) are always considered valid.
+		/// Physical paths are checked for existence and results are cached for 2 seconds to handle file system changes.
+		/// The cache is periodically cleaned to remove expired entries.
+		/// </summary>
+		/// <param name="path">The path to validate. Can be a virtual path (shell folder, MTP device) or a physical file system path.</param>
+		/// <returns>True if the path is valid (exists or is a recognized virtual path); otherwise, false.</returns>
 		private bool IsPathValid(string path)
 		{
 			// Virtual paths are always valid (no file system check needed)
