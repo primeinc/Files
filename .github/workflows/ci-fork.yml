@@ -13,6 +13,11 @@ on:
       - 'docs/**'
       - '*.md'
 
+# Auto-cancel previous runs when a new commit is pushed to the same PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write  # Allow pushing formatting fixes
   pull-requests: write  # Allow PR comments
