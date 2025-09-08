@@ -144,6 +144,27 @@ namespace Files.App
 			}
 		}
 
+		public static class IpcSettings
+		{
+			public const long WebSocketMaxMessageBytes = 16L * 1024L * 1024L; // 16 MB
+			
+			public const long NamedPipeMaxMessageBytes = 10L * 1024L * 1024L; // 10 MB
+			
+			public const long PerClientQueueCapBytes = 2L * 1024L * 1024L; // 2 MB
+			
+			public const int RateLimitPerSecond = 20;
+			
+			public const int RateLimitBurst = 60;
+			
+			public const int SelectionNotificationCap = 200;
+			
+			public const int GetMetadataMaxItems = 500;
+			
+			public const int GetMetadataTimeoutSec = 30;
+			
+			public const int StackTraceSanitizationMaxLength = 300; // Max characters for sanitized stack traces
+		}
+
 		public static class LocalSettings
 		{
 			public const string DateTimeFormat = "datetimeformat";
@@ -223,7 +244,7 @@ namespace Files.App
 
 		public static class DragAndDrop
 		{
-			public const Int32 HoverToOpenTimespan = 1300;
+			public const int HoverToOpenTimespan = 1300;
 		}
 
 		public static class UserEnvironmentPaths
@@ -281,6 +302,20 @@ namespace Files.App
 				"49306atecsolution.FilesPreview", // store preview
 				"FilesDev", // dev
 			};
+		}
+
+		public static class PathValidationConstants
+		{
+			public const string SHELL_PREFIX = "shell:";
+			public const string HOME_PREFIX = "Home";
+			public const string RELEASE_NOTES = "ReleaseNotes";
+			public const string SETTINGS_PREFIX = "Settings";
+			public const string TAG_PREFIX = "tag:";
+			public const string SHELL_FOLDER_UNC_PREFIX = @"\\SHELL\"; // virtual shell namespace root used internally
+			public const string EXTENDED_PATH_PREFIX = @"\\?\"; // Win32 extended-length path prefix (for paths >260 chars)
+			public const string DEVICE_NAMESPACE_PREFIX = @"\\.\"; // Win32 device namespace prefix
+			public const string MTP_PREFIX = "mtp:"; // Media Transfer Protocol devices (Android phones, cameras)
+			public const string SHELL_FOLDER_PREFIX = "::"; // Shell folder CLSID prefix
 		}
 	}
 }

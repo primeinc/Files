@@ -1,6 +1,9 @@
 // Copyright (c) Files Community
 // Licensed under the MIT License.
 
+using Files.App.Communication;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -17,6 +20,7 @@ namespace Files.App.Views.Shells
 			=> ItemDisplayFrame;
 
 		private NavigationInteractionTracker _navigationInteractionTracker;
+		private ShellIpcBootstrapper? _ipcBootstrapper;
 
 		private NavigationParams _NavParams;
 		public NavigationParams NavParams
@@ -52,6 +56,74 @@ namespace Files.App.Views.Shells
 
 			_navigationInteractionTracker = new NavigationInteractionTracker(this, BackIcon, ForwardIcon);
 			_navigationInteractionTracker.NavigationRequested += OverscrollNavigationRequested;
+
+			// Wire up IPC when the page loads
+			Loaded += OnPageLoaded;
+			Unloaded += OnPageUnloaded;
+		}
+
+		private void OnPageLoaded(object sender, RoutedEventArgs e)
+		{
+			try
+			{
+				// Create IPC bootstrapper for this shell
+				var registry = Ioc.Default.GetRequiredService<IIpcShellRegistry>();
+				var commService = Ioc.Default.GetRequiredService<IAppCommunicationService>();
+				var commandManager = Ioc.Default.GetRequiredService<ICommandManager>();
+				var methodRegistry = Ioc.Default.GetRequiredService<RpcMethodRegistry>();
+				var bootstrapLogger = Ioc.Default.GetRequiredService<ILogger<ShellIpcBootstrapper>>();
+				var adapterLogger = Ioc.Default.GetRequiredService<ILogger<ShellIpcAdapter>>();
+				var actionAdapterLogger = Ioc.Default.GetRequiredService<ILogger<IpcActionAdapter>>();
+
+				// Get the tab ID - for now we generate a unique ID per shell instance
+				// In the future, this could be retrieved from the parent TabBarItem if it gets a TabId property
+				var tabId = Guid.NewGuid();
+				
+				// Get the window ID from the current MainWindow's AppWindow
+				// Extract the underlying numeric value (ulong) with overflow protection
+				uint windowId;
+				if (MainWindow.Instance?.AppWindow?.Id.Value is ulong rawId)
+				{
+					if (rawId <= uint.MaxValue)
+					{
+						windowId = (uint)rawId;
+					}
+					else
+					{
+						// Log a warning if the window ID exceeds uint.MaxValue to prevent silent data loss
+						App.Logger.LogWarning("Window ID ({RawId}) exceeds uint.MaxValue; falling back to 0.", rawId);
+						windowId = 0u;
+					}
+				}
+				else
+				{
+					windowId = 0u;
+				}
+
+				_ipcBootstrapper = new ShellIpcBootstrapper(
+					registry,
+					this,
+					windowId,
+					tabId,
+					commService,
+					commandManager,
+					methodRegistry,
+					DispatcherQueue,
+					bootstrapLogger,
+					adapterLogger,
+					actionAdapterLogger);
+			}
+			catch (Exception ex)
+			{
+				App.Logger.LogError(ex, "Failed to initialize IPC for ModernShellPage");
+			}
+		}
+
+		private void OnPageUnloaded(object sender, RoutedEventArgs e)
+		{
+			// Cleanup IPC bootstrapper
+			_ipcBootstrapper?.Dispose();
+			_ipcBootstrapper = null;
 		}
 
 		private async void ShellViewModel_FocusFilterHeader(object sender, EventArgs e)
@@ -90,7 +162,11 @@ namespace Files.App.Views.Shells
 
 		protected override void OnNavigationParamsChanged()
 		{
-			if (string.IsNullOrEmpty(NavParams?.NavPath) || NavParams.NavPath == "Home")
+			var home = Constants.PathValidationConstants.HOME_PREFIX;
+			var releaseNotes = Constants.PathValidationConstants.RELEASE_NOTES;
+			var tagPrefix = Constants.PathValidationConstants.TAG_PREFIX;
+
+			if (string.IsNullOrEmpty(NavParams?.NavPath) || NavParams.NavPath == home)
 			{
 				ItemDisplayFrame.Navigate(
 					typeof(HomePage),
@@ -100,7 +176,7 @@ namespace Files.App.Views.Shells
 						AssociatedTabInstance = this
 					}, new SuppressNavigationTransitionInfo());
 			}
-			else if (NavParams.NavPath == "ReleaseNotes")
+			else if (NavParams.NavPath == releaseNotes)
 			{
 				ItemDisplayFrame.Navigate(
 					typeof(ReleaseNotesPage),
@@ -110,20 +186,9 @@ namespace Files.App.Views.Shells
 						AssociatedTabInstance = this
 					}, new SuppressNavigationTransitionInfo());
 			}
-			// TODO add settings page
-			//else if (NavParams.NavPath == "Settings")
-			//{
-			//	ItemDisplayFrame.Navigate(
-			//		typeof(ReleaseNotesPage),
-			//		new NavigationArguments()
-			//		{
-			//			NavPathParam = NavParams?.NavPath,
-			//			AssociatedTabInstance = this
-			//		}, new SuppressNavigationTransitionInfo());
-			//}
 			else
 			{
-				var isTagSearch = NavParams.NavPath.StartsWith("tag:");
+				var isTagSearch = NavParams.NavPath.StartsWith(tagPrefix, StringComparison.OrdinalIgnoreCase);
 
 				ItemDisplayFrame.Navigate(
 					InstanceViewModel.FolderSettings.GetLayoutType(NavParams.NavPath),
@@ -132,7 +197,7 @@ namespace Files.App.Views.Shells
 						NavPathParam = NavParams.NavPath,
 						SelectItems = !string.IsNullOrWhiteSpace(NavParams?.SelectItem) ? new[] { NavParams.SelectItem } : null,
 						IsSearchResultPage = isTagSearch,
-						SearchPathParam = isTagSearch ? "Home" : null,
+						SearchPathParam = isTagSearch ? home : null,
 						SearchQuery = isTagSearch ? NavParams.NavPath : null,
 						AssociatedTabInstance = this
 					});
@@ -230,7 +295,7 @@ namespace Files.App.Views.Shells
 					typeof(HomePage),
 					new NavigationArguments()
 					{
-						NavPathParam = "Home",
+						NavPathParam = Constants.PathValidationConstants.HOME_PREFIX,
 						AssociatedTabInstance = this
 					},
 					new SuppressNavigationTransitionInfo());
@@ -274,7 +339,7 @@ namespace Files.App.Views.Shells
 				typeof(HomePage),
 				new NavigationArguments()
 				{
-					NavPathParam = "Home",
+					NavPathParam = Constants.PathValidationConstants.HOME_PREFIX,
 					AssociatedTabInstance = this
 				},
 				new SuppressNavigationTransitionInfo());
@@ -286,7 +351,7 @@ namespace Files.App.Views.Shells
 				typeof(ReleaseNotesPage),
 				new NavigationArguments()
 				{
-					NavPathParam = "ReleaseNotes",
+					NavPathParam = Constants.PathValidationConstants.RELEASE_NOTES,
 					AssociatedTabInstance = this
 				},
 				new SuppressNavigationTransitionInfo());
@@ -295,6 +360,7 @@ namespace Files.App.Views.Shells
 		public override void NavigateToPath(string? navigationPath, Type? sourcePageType, NavigationArguments? navArgs = null)
 		{
 			ShellViewModel.FilesAndFoldersFilter = null;
+			var tagPrefix = Constants.PathValidationConstants.TAG_PREFIX;
 
 			if (sourcePageType is null && !string.IsNullOrEmpty(navigationPath))
 				sourcePageType = InstanceViewModel.FolderSettings.GetLayoutType(navigationPath);
@@ -315,7 +381,7 @@ namespace Files.App.Views.Shells
 						StringComparison.OrdinalIgnoreCase)) &&
 					(TabBarItemParameter?.NavigationParameter is not string navArg ||
 					string.IsNullOrEmpty(navArg) ||
-					!navArg.StartsWith("tag:"))) // Return if already selected
+					!navArg.StartsWith(tagPrefix, StringComparison.OrdinalIgnoreCase))) // Return if already selected
 				{
 					if (InstanceViewModel?.FolderSettings is LayoutPreferencesManager fsModel)
 						fsModel.IsLayoutModeChanging = false;

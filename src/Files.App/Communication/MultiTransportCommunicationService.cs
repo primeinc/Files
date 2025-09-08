@@ -1,0 +1,80 @@
+using System;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+
+namespace Files.App.Communication
+{
+	public sealed class MultiTransportCommunicationService : IAppCommunicationService, IDisposable
+	{
+		private readonly WebSocketAppCommunicationService _websocket;
+		private readonly NamedPipeAppCommunicationService _pipes;
+		private readonly ILogger<MultiTransportCommunicationService> _logger;
+
+		public event Func<ClientContext, JsonRpcMessage, Task>? OnRequestReceived;
+
+		public MultiTransportCommunicationService(
+			WebSocketAppCommunicationService ws,
+			NamedPipeAppCommunicationService pipes,
+			ILogger<MultiTransportCommunicationService> logger)
+		{
+			_websocket = ws;
+			_pipes = pipes;
+			_logger = logger;
+			_websocket.OnRequestReceived += RelayAsync;
+			_pipes.OnRequestReceived += RelayAsync;
+		}
+
+		private Task RelayAsync(ClientContext ctx, JsonRpcMessage msg)
+		{
+			return OnRequestReceived?.Invoke(ctx, msg) ?? Task.CompletedTask;
+		}
+
+		public async Task StartAsync()
+		{
+			try
+			{
+				await _websocket.StartAsync();
+				await _pipes.StartAsync();
+			}
+			catch (Exception ex)
+			{
+				_logger.LogError(ex, "Failed starting multi transport IPC");
+				throw;
+			}
+		}
+
+		public async Task StopAsync()
+		{
+			try
+			{
+				await _websocket.StopAsync();
+				await _pipes.StopAsync();
+			}
+			catch (Exception ex)
+			{
+				_logger.LogWarning(ex, "Errors stopping transports");
+			}
+		}
+
+		public Task SendResponseAsync(ClientContext client, JsonRpcMessage response)
+		{
+			if (client.WebSocket != null)
+				return _websocket.SendResponseAsync(client, response);
+			if (client.PipeWriter != null)
+				return _pipes.SendResponseAsync(client, response);
+			return Task.CompletedTask;
+		}
+
+		public async Task BroadcastAsync(JsonRpcMessage notification)
+		{
+			await _websocket.BroadcastAsync(notification);
+			await _pipes.BroadcastAsync(notification);
+		}
+
+		public void Dispose()
+		{
+			(_websocket as IDisposable)?.Dispose();
+			(_pipes as IDisposable)?.Dispose();
+		}
+	}
+}

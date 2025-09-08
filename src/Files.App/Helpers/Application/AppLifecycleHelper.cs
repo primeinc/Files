@@ -17,6 +17,7 @@ using Windows.ApplicationModel;
 using Windows.Storage;
 using Windows.System;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
+using Files.App.Communication; // Added for IPC service registrations
 
 namespace Files.App.Helpers
 {
@@ -102,6 +103,8 @@ namespace Files.App.Helpers
 			var addItemService = Ioc.Default.GetRequiredService<IAddItemService>();
 			var generalSettingsService = userSettingsService.GeneralSettingsService;
 			var jumpListService = Ioc.Default.GetRequiredService<IWindowsJumpListService>();
+			var ipcService = Ioc.Default.GetRequiredService<IAppCommunicationService>();
+			var ipcCoordinator = Ioc.Default.GetRequiredService<IpcCoordinator>();
 
 			// Start off a list of tasks we need to run before we can continue startup
 			await Task.WhenAll(
@@ -119,7 +122,9 @@ namespace Files.App.Helpers
 					jumpListService.InitializeAsync(),
 					addItemService.InitializeAsync(),
 					ContextMenu.WarmUpQueryContextMenuAsync(),
-					CheckAppUpdate()
+					CheckAppUpdate(),
+					// Initialize IPC service if remote control is enabled
+					OptionalTaskAsync(InitializeIpcAsync(ipcService, ipcCoordinator), Files.App.Communication.ProtectedTokenStore.IsEnabled())
 				);
 			});
 
@@ -134,6 +139,15 @@ namespace Files.App.Helpers
 			}
 
 			generalSettingsService.PropertyChanged += GeneralSettingsService_PropertyChanged;
+		}
+
+		private static async Task InitializeIpcAsync(IAppCommunicationService ipcService, IpcCoordinator ipcCoordinator)
+		{
+			App.Logger?.LogInformation("[IPC] Starting IPC service...");
+			await ipcService.StartAsync();
+			App.Logger?.LogInformation("[IPC] IPC service started, initializing coordinator...");
+			ipcCoordinator.Initialize();
+			App.Logger?.LogInformation("[IPC] IPC system fully initialized and ready for requests");
 		}
 
 		/// <summary>
@@ -217,6 +231,7 @@ namespace Files.App.Helpers
 					.AddSingleton<ITagsContext, TagsContext>()
 					.AddSingleton<ISidebarContext, SidebarContext>()
 					// Services
+					.AddSingleton(Ioc.Default)
 					.AddSingleton<IWindowsRecentItemsService, WindowsRecentItemsService>()
 					.AddSingleton<IWindowsIniService, WindowsIniService>()
 					.AddSingleton<IWindowsWallpaperService, WindowsWallpaperService>()
@@ -249,6 +264,14 @@ namespace Files.App.Helpers
 					.AddSingleton<IStorageArchiveService, StorageArchiveService>()
 					.AddSingleton<IStorageSecurityService, StorageSecurityService>()
 					.AddSingleton<IWindowsCompatibilityService, WindowsCompatibilityService>()
+					// IPC system
+					.AddSingleton<RpcMethodRegistry>()
+					.AddSingleton<WebSocketAppCommunicationService>()
+					.AddSingleton<NamedPipeAppCommunicationService>()
+					.AddSingleton<IAppCommunicationService, MultiTransportCommunicationService>()
+					.AddSingleton<IIpcShellRegistry, IpcShellRegistry>()
+					.AddSingleton<IWindowResolver, WindowResolver>()
+					.AddSingleton<IpcCoordinator>()
 					// ViewModels
 					.AddSingleton<MainPageViewModel>()
 					.AddSingleton<InfoPaneViewModel>()
@@ -320,36 +343,87 @@ namespace Files.App.Helpers
 
 			if (ex is not null)
 			{
-				ex.Data[Mechanism.HandledKey] = false;
-				ex.Data[Mechanism.MechanismKey] = "Application.UnhandledException";
+				try
+				{
+					// Mark as unhandled for Sentry
+					ex.Data[Mechanism.HandledKey] = false;
+					ex.Data[Mechanism.MechanismKey] = "Application.UnhandledException";
+				}
+				catch (Exception exData)
+				{
+					App.Logger?.LogTrace(exData, "Failed to set exception data for Sentry");
+				}
 
+				// Capture with highest severity
 				SentrySdk.CaptureException(ex, scope =>
 				{
 					scope.User.Id = generalSettingsService?.UserId;
 					scope.Level = SentryLevel.Fatal;
 				});
 
+				Exception primary = ex;
+				// Flatten aggregate exceptions so we log all inner exceptions
+				List<Exception> all = new();
+				if (ex is AggregateException aggr)
+				{
+					var flat = aggr.Flatten();
+					primary = flat.InnerExceptions.FirstOrDefault() ?? aggr;
+					all.AddRange(flat.InnerExceptions);
+				}
+				else
+				{
+					all.Add(primary);
+				}
+
 				formattedException.AppendLine($">>>> HRESULT: {ex.HResult}");
 
-				if (ex.Message is not null)
+				if (!string.IsNullOrWhiteSpace(primary.Message))
 				{
 					formattedException.AppendLine("--- MESSAGE ---");
-					formattedException.AppendLine(ex.Message);
+					// Sanitize primary exception message to prevent information disclosure
+					formattedException.AppendLine(SanitizeExceptionMessage(primary.Message));
 				}
-				if (ex.StackTrace is not null)
+
+				if (!string.IsNullOrWhiteSpace(primary.StackTrace))
 				{
 					formattedException.AppendLine("--- STACKTRACE ---");
-					formattedException.AppendLine(ex.StackTrace);
+					// Sanitize primary stack trace to remove sensitive paths
+					formattedException.AppendLine(SanitizeStackTrace(primary.StackTrace));
 				}
-				if (ex.Source is not null)
+
+				if (!string.IsNullOrWhiteSpace(primary.Source))
 				{
 					formattedException.AppendLine("--- SOURCE ---");
-					formattedException.AppendLine(ex.Source);
+					formattedException.AppendLine(primary.Source);
 				}
-				if (ex.InnerException is not null)
+
+				// Log all inner/aggregate exceptions (excluding the primary already logged above)
+				if (all.Count > 1 || primary.InnerException is not null)
 				{
-					formattedException.AppendLine("--- INNER ---");
-					formattedException.AppendLine(ex.InnerException.ToString());
+					formattedException.AppendLine("--- INNER EXCEPTIONS ---");
+					int idx = 0;
+					foreach (var inner in all)
+					{
+						if (ReferenceEquals(inner, primary))
+							continue;
+						
+						// Sanitize inner exception messages to prevent information disclosure
+						var sanitizedMessage = SanitizeExceptionMessage(inner.Message);
+						formattedException.AppendLine($"[{idx++}] {inner.GetType().FullName}: {sanitizedMessage}");
+						
+						if (!string.IsNullOrWhiteSpace(inner.StackTrace))
+						{
+							// Sanitize stack traces to remove sensitive paths and information
+							var sanitizedStack = SanitizeStackTrace(inner.StackTrace);
+							formattedException.AppendLine(sanitizedStack);
+						}
+					}
+					if (primary.InnerException is not null && !all.Contains(primary.InnerException))
+					{
+						// Sanitize the ToString() output which may contain sensitive data
+						var sanitizedInner = SanitizeExceptionMessage(primary.InnerException.ToString());
+						formattedException.AppendLine($"[Inner] {sanitizedInner}");
+					}
 				}
 			}
 			else
@@ -361,43 +435,134 @@ namespace Files.App.Helpers
 
 			Debug.WriteLine(formattedException.ToString());
 
-			// Please check "Output Window" for exception details (View -> Output Window) (CTRL + ALT + O)
-			Debugger.Break();
+			// Only break if a debugger is attached to avoid prompting end users.
+			// Wrap in DEBUG directive to prevent breaking in release builds
+#if DEBUG
+			if (Debugger.IsAttached)
+				Debugger.Break();
+#endif
 
-			// Save the current tab list in case it was overwriten by another instance
+			// Save the current tab list in case it was overwritten by another instance
 			SaveSessionTabs();
 			App.Logger?.LogError(ex, ex?.Message ?? "An unhandled error occurred.");
 
-			if (!showToastNotification)
-				return;
-
-			SafetyExtensions.IgnoreExceptions(() =>
+			// Show toast if requested but do not short‑circuit restart logic.
+			if (showToastNotification)
 			{
-				AppToastNotificationHelper.ShowUnhandledExceptionToast();
-			});
-
-			// Restart the app
-			var userSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
-			var lastSessionTabList = userSettingsService.GeneralSettingsService.LastSessionTabList;
-
-			if (userSettingsService.GeneralSettingsService.LastCrashedTabList?.SequenceEqual(lastSessionTabList) ?? false)
-			{
-				// Avoid infinite restart loop
-				userSettingsService.GeneralSettingsService.LastSessionTabList = null;
-			}
-			else
-			{
-				userSettingsService.AppSettingsService.RestoreTabsOnStartup = true;
-				userSettingsService.GeneralSettingsService.LastCrashedTabList = lastSessionTabList;
-
-				// Try to re-launch and start over
-				MainWindow.Instance.DispatcherQueue.EnqueueOrInvokeAsync(async () =>
+				SafetyExtensions.IgnoreExceptions(() =>
 				{
-					await Launcher.LaunchUriAsync(new Uri("files-dev:"));
-				})
-				.Wait(100);
+					AppToastNotificationHelper.ShowUnhandledExceptionToast();
+				});
 			}
-			Process.GetCurrentProcess().Kill();
+
+			// Restart the app attempting to restore tabs (unless we detect a crash loop)
+			try
+			{
+				var userSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
+				var lastSessionTabList = userSettingsService.GeneralSettingsService.LastSessionTabList;
+
+				if (userSettingsService.GeneralSettingsService.LastCrashedTabList?.SequenceEqual(lastSessionTabList) ?? false)
+				{
+					// Avoid infinite restart loop
+					userSettingsService.GeneralSettingsService.LastSessionTabList = null;
+				}
+				else
+				{
+					userSettingsService.AppSettingsService.RestoreTabsOnStartup = true;
+					userSettingsService.GeneralSettingsService.LastCrashedTabList = lastSessionTabList;
+
+					// Try to re-launch and start over (best effort, do not await indefinitely)
+					MainWindow.Instance.DispatcherQueue.EnqueueOrInvokeAsync(async () =>
+					{
+						try
+						{
+							await Launcher.LaunchUriAsync(new Uri("files-dev:"));
+						}
+						catch (Exception ex)
+						{
+							App.Logger?.LogError(ex, "Failed to restart app via Launcher.LaunchUriAsync after crash.");
+						}
+					})
+					.Wait(100);
+				}
+			}
+			catch (Exception restartEx)
+			{
+				App.Logger?.LogError(restartEx, "Failed while attempting auto-restart after unhandled exception.");
+			}
+			finally
+			{
+				// Give Sentry a brief moment to flush events (best effort, non-blocking long)
+				try { SentrySdk.FlushAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult(); } catch { }
+				
+				// DESIGN DECISION: Abrupt Process Termination
+				// ============================================
+				// We use Process.Kill() instead of Environment.Exit() or Application.Exit() because:
+				// 1. This is an unhandled exception handler - the app state may be corrupted
+				// 2. Graceful shutdown methods might hang or fail in corrupted state
+				// 3. We've already attempted restart and logged telemetry - immediate termination is safest
+				// 4. Any important data should have been saved during the restart attempt above
+				// 
+				// Alternative approaches considered:
+				// - Environment.Exit(): May hang if finalizers are corrupted
+				// - Application.Exit(): May not work if UI thread is corrupted
+				// - Natural termination: May leave process hanging indefinitely
+				//
+				// Risk mitigation: The restart logic above saves session state before this point.
+				Process.GetCurrentProcess().Kill();
+			}
+		}
+
+		/// <summary>
+		/// Sanitizes exception messages to remove sensitive information like file paths, tokens, and user data.
+		/// </summary>
+		private static string SanitizeExceptionMessage(string? message)
+		{
+			if (string.IsNullOrEmpty(message))
+				return string.Empty;
+
+			// Remove Windows absolute paths (C:\Users\...) 
+			message = System.Text.RegularExpressions.Regex.Replace(message, @"[A-Z]:\\[^""<>|]*", "[path]", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+			
+			// Remove Unix-style paths (/home/user/...)
+			message = System.Text.RegularExpressions.Regex.Replace(message, @"\/[^""<>|]*\/[^""<>| ]+", "[path]");
+			
+			// Remove UNC paths (\\server\share\...)
+			message = System.Text.RegularExpressions.Regex.Replace(message, @"\\\\[^\\""<>|]+\\[^""<>|]*", "[network-path]");
+			
+			// Remove potential tokens/keys (base64-like strings)
+			message = System.Text.RegularExpressions.Regex.Replace(message, @"\b[A-Za-z0-9+/]{20,}={0,2}\b", "[token]");
+			
+			// Remove GUIDs
+			message = System.Text.RegularExpressions.Regex.Replace(message, @"\b[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}\b", "[guid]");
+
+			return message;
+		}
+
+		/// <summary>
+		/// Sanitizes stack traces to remove sensitive file paths and system information.
+		/// </summary>
+		private static string SanitizeStackTrace(string? stackTrace)
+		{
+			if (string.IsNullOrEmpty(stackTrace))
+				return string.Empty;
+
+			// Remove file paths with line numbers (e.g., C:\path\file.cs:line 123)
+			stackTrace = System.Text.RegularExpressions.Regex.Replace(stackTrace, @"[A-Z]:\\[^:""<>|]+\.cs:line \d+", "[source]:line [n]", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+			
+			// Remove Unix paths with line numbers
+			stackTrace = System.Text.RegularExpressions.Regex.Replace(stackTrace, @"\/[^:""<>|]+\.cs:line \d+", "[source]:line [n]");
+			
+			// Remove remaining file paths
+			stackTrace = System.Text.RegularExpressions.Regex.Replace(stackTrace, @"[A-Z]:\\[^""<>|\s]+", "[path]", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+			
+			// Truncate if too long to prevent log flooding
+			if (stackTrace.Length > 2000)
+			{
+				stackTrace = stackTrace.Substring(0, 2000) + "... [truncated]";
+			}
+
+			return stackTrace;
 		}
 
 		/// <summary>

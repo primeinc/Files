@@ -43,6 +43,16 @@ namespace Files.App.ViewModels
 		private readonly DispatcherQueue dispatcherQueue;
 		private readonly JsonElement defaultJson = JsonSerializer.SerializeToElement("{}");
 		private readonly string folderTypeTextLocalized = Strings.Folder.GetLocalizedResource();
+		
+		// Path validation cache to minimize file system calls
+		// Entries expire after 2 seconds to handle file system changes
+		private readonly ConcurrentDictionary<string, (bool exists, DateTime checkedAt)> pathValidationCache = new();
+		
+		// Cache configuration constants
+		private const int PathCacheMaxSize = 100;
+		private const int PathCacheCleanupBatchSize = 20;
+		private const int PathCacheCleanupThreshold = 150; // Cleanup when cache exceeds this size (50% over max)
+		private const double PathCacheExpirationSeconds = 2.0;
 
 		private Task? aProcessQueueAction;
 		private Task? gitProcessQueueAction;
@@ -290,7 +300,7 @@ namespace Files.App.ViewModels
 		public async Task<FilesystemResult<StorageFileWithPath>> GetFileWithPathFromPathAsync(string value, CancellationToken cancellationToken = default)
 		{
 			await getFileOrFolderSemaphore.WaitAsync(cancellationToken);
-			try
+		try
 			{
 				return await FilesystemTasks.Wrap(() => StorageFileExtensions.DangerousGetFileWithPathFromPathAsync(value, workingRoot, currentStorageFolder));
 			}
@@ -490,7 +500,7 @@ namespace Files.App.ViewModels
 				if (value)
 				{
 					folderSettings.DirectorySortOption = SortOption.SyncStatus;
-					OnPropertyChanged(nameof(IsSortedBySyncStatus));
+				 OnPropertyChanged(nameof(IsSortedBySyncStatus));
 				}
 			}
 		}
@@ -1556,7 +1566,72 @@ namespace Files.App.ViewModels
 			return groupImage;
 		}
 
-		public void RefreshItems(string? previousDir, Action postLoadCallback = null)
+		/// <summary>
+		/// Validates whether the specified path exists, using an optimized caching mechanism to minimize file system calls.
+		/// Virtual paths (e.g., shell folders and MTP devices) are always considered valid.
+		/// Physical paths are checked for existence and results are cached for 2 seconds to handle file system changes.
+		/// The cache is periodically cleaned to remove expired entries.
+		/// </summary>
+		/// <param name="path">The path to validate. Can be a virtual path (shell folder, MTP device) or a physical file system path.</param>
+		/// <returns>True if the path is valid (exists or is a recognized virtual path); otherwise, false.</returns>
+		private bool IsPathValid(string path)
+		{
+			// Virtual paths are always valid (no file system check needed)
+			// Optimize: Quick length check first to avoid unnecessary StartsWith calls
+			if (path.Length > 0)
+			{
+				// Check for shell folder (starts with "::")
+				if (path.StartsWith(Constants.PathValidationConstants.SHELL_FOLDER_PREFIX, StringComparison.OrdinalIgnoreCase))
+					return true;
+				
+				// Check for MTP device (starts with "mtp:")
+				if (path.StartsWith(Constants.PathValidationConstants.MTP_PREFIX, StringComparison.OrdinalIgnoreCase))
+					return true;
+			}
+
+			var now = DateTime.UtcNow;
+
+			// Check cache first
+			if (pathValidationCache.TryGetValue(path, out var cached))
+			{
+				// If cache entry is fresh, return cached result
+				if ((now - cached.checkedAt).TotalSeconds < PathCacheExpirationSeconds)
+				{
+					return cached.exists;
+				}
+			}
+
+			// Perform actual file system check
+			bool exists = Directory.Exists(path);
+			
+			// Update cache with new result
+			pathValidationCache.AddOrUpdate(path, 
+				(exists, now), 
+				(_, _) => (exists, now));
+
+			// Clean up old cache entries deterministically when threshold exceeded
+			if (pathValidationCache.Count > PathCacheCleanupThreshold)
+			{
+				// CRITICAL: Take a snapshot to avoid "Collection was modified" exceptions
+				// ConcurrentDictionary enumeration is not thread-safe during concurrent modifications
+				var expiredKeys = pathValidationCache
+					.ToArray()  // Snapshot prevents crashes from concurrent modifications
+					.Where(kvp => (now - kvp.Value.checkedAt).TotalSeconds > PathCacheExpirationSeconds * 2)
+					.Select(kvp => kvp.Key)
+					.Take(PathCacheCleanupBatchSize)
+					.ToList();  // Materialize before removal to avoid deferred execution issues
+
+				// Safe to remove after snapshot and materialization
+				foreach (var key in expiredKeys)
+				{
+					pathValidationCache.TryRemove(key, out _);
+				}
+			}
+
+			return exists;
+		}
+
+		public void RefreshItems(string? previousDir = null, Action postLoadCallback = null)
 		{
 			RapidAddItemsToCollectionAsync(WorkingDirectory, previousDir, postLoadCallback);
 		}
@@ -1631,10 +1706,19 @@ namespace Files.App.ViewModels
 			if (string.IsNullOrEmpty(path))
 				return;
 
+			// Quick validation to prevent hanging on invalid paths
+			// Use cached validation to minimize expensive Directory.Exists calls
+			if (!IsPathValid(path))
+			{
+				Debug.WriteLine($"Skipping enumeration of non-existent path: {path}");
+				IsLoadingItems = false;
+				return;
+			}
+
 			var stopwatch = new Stopwatch();
 			stopwatch.Start();
 
-			var isRecycleBin = path.StartsWith(Constants.UserEnvironmentPaths.RecycleBinPath, StringComparison.Ordinal);
+			var isRecycleBin = path.StartsWith(Constants.UserEnvironmentPaths.RecycleBinPath, StringComparison.OrdinalIgnoreCase);
 			var enumerated = await EnumerateItemsFromStandardFolderAsync(path, addFilesCTS.Token, library);
 
 			// Hide progressbar after enumeration
@@ -1709,8 +1793,9 @@ namespace Files.App.ViewModels
 			var isBoxFolder = CloudDrivesManager.Drives.FirstOrDefault(x => x.Text == "Box")?.Path?.TrimEnd('\\') is string boxFolder && path.StartsWith(boxFolder);
 			bool isWslDistro = path.StartsWith(@"\\wsl$\", StringComparison.OrdinalIgnoreCase) || path.StartsWith(@"\\wsl.localhost\", StringComparison.OrdinalIgnoreCase)
 				|| path.Equals(@"\\wsl$", StringComparison.OrdinalIgnoreCase) || path.Equals(@"\\wsl.localhost", StringComparison.OrdinalIgnoreCase);
-			bool isMtp = path.StartsWith(@"\\?\", StringComparison.Ordinal);
-			bool isShellFolder = path.StartsWith(@"\\SHELL\", StringComparison.Ordinal);
+			// Check for special path prefixes
+			bool isMtp = path.StartsWith(Constants.PathValidationConstants.MTP_PREFIX, StringComparison.OrdinalIgnoreCase);
+			bool isShellFolder = path.StartsWith(Constants.PathValidationConstants.SHELL_FOLDER_PREFIX, StringComparison.Ordinal);
 			bool isNetwork = path.StartsWith(@"\\", StringComparison.Ordinal) &&
 				!isMtp &&
 				!isShellFolder &&
@@ -1990,7 +2075,9 @@ namespace Files.App.ViewModels
 
 		public void CheckForBackgroundImage()
 		{
-			if (WorkingDirectory == "Home" || WorkingDirectory == "ReleaseNotes" || WorkingDirectory == "Settings")
+			if (WorkingDirectory == Constants.PathValidationConstants.HOME_PREFIX || 
+			    WorkingDirectory == Constants.PathValidationConstants.RELEASE_NOTES || 
+			    WorkingDirectory == Constants.PathValidationConstants.SETTINGS_PREFIX)
 			{
 				FolderBackgroundImageSource = null;
 				return;
@@ -2513,8 +2600,6 @@ namespace Files.App.ViewModels
 			{
 				// Prevent disposed cancellation token
 			}
-
-			Debug.WriteLine("aProcessQueueAction done: {0}", rand);
 		}
 
 		public Task<ListedItem> AddFileOrFolderFromShellFile(ShellFileItem item)
