@@ -246,7 +246,9 @@ class UnifiedIpcTester:
             self.test_navigation,
             self.test_invalid_paths,
             self.test_metadata,
+            self.test_list_shells,
             self.test_actions,
+            self.test_invalid_action,
             self.test_error_handling,
             self.test_large_payload,
         ]
@@ -274,6 +276,11 @@ class UnifiedIpcTester:
         actions = await self.client.call("listActions")
         assert "actions" in actions, "Missing actions list"
         assert len(actions["actions"]) > 0, "No actions available"
+        
+        # Print available actions for debugging
+        print(f"\n[INFO] Available IPC actions:")
+        for action in actions["actions"]:
+            print(f"  - {action['id']}: {action.get('description', 'No description')}")
     
     async def test_navigation(self):
         """Test navigation operations."""
@@ -333,6 +340,13 @@ class UnifiedIpcTester:
             assert "RPC error" in error_str, f"Expected RPC error format, got: {error_str}"
             assert any(x in error_str.lower() for x in ["invalid", "character", "path"]), \
                 f"Error should indicate invalid characters, got: {error_str}"
+        
+        # IMPORTANT: Reset to a valid path to ensure shell is in good state for next tests
+        import os
+        pictures_path = os.path.expanduser("~\\Pictures")
+        result = await self.client.call("navigate", {"path": pictures_path})
+        assert result["status"] == "ok", "Failed to reset to valid Pictures path"
+        print(f"  [DEBUG] Reset shell to valid path: {pictures_path}")
     
     async def test_metadata(self):
         """Test metadata retrieval."""
@@ -346,15 +360,109 @@ class UnifiedIpcTester:
             assert "Path" in item, "Missing Path in metadata"
             assert "Exists" in item, "Missing Exists in metadata"
     
-    async def test_actions(self):
-        """Test action execution."""
-        # Refresh action
-        result = await self.client.call("executeAction", {"actionId": "refresh"})
-        # Should not throw
+    async def test_list_shells(self):
+        """Test shell enumeration."""
+        result = await self.client.call("listShells", {})
         
-        # Invalid action
+        assert "shells" in result, "Missing shells in response"
+        assert isinstance(result["shells"], list), "Shells should be a list"
+        assert len(result["shells"]) > 0, "Should have at least one shell"
+        
+        # Check first shell has required fields
+        shell = result["shells"][0]
+        assert "shellId" in shell, "Missing shellId"
+        assert "windowId" in shell, "Missing windowId"
+        assert "tabId" in shell, "Missing tabId"
+        assert "isActive" in shell, "Missing isActive flag"
+        assert "window" in shell, "Missing window info"
+        assert "currentPath" in shell, "Missing currentPath"
+        assert "availableActions" in shell, "Missing availableActions"
+        
+        # Verify window info structure
+        window = shell["window"]
+        assert "pid" in window, "Missing PID in window info"
+        assert "title" in window, "Missing title in window info"
+        assert "isFocused" in window, "Missing isFocused in window info"
+        assert "bounds" in window, "Missing bounds in window info"
+        
+        print(f"  [INFO] Found {len(result['shells'])} shell(s):")
+        for s in result["shells"]:
+            print(f"    - Shell {s['shellId'][:8]}... in window {s['windowId']}, path: {s['currentPath']}")
+    
+    async def test_actions(self):
+        """Test ALL available actions dynamically."""
+        # Navigate to valid directory first
+        await self.client.call("navigate", {"path": "C:\\Users"})
+        
+        # Wait for navigation to complete and UI to fully initialize
+        for i in range(10):  # Try up to 10 times
+            await asyncio.sleep(0.5)
+            state = await self.client.call("getState", {})
+            if not state.get("isLoading", True) and state.get("itemCount", 0) > 0:
+                print(f"[DEBUG] Navigation complete after {(i+1)*0.5}s: {state}")
+                # Give the UI a bit more time to update PageType
+                await asyncio.sleep(0.5)
+                break
+        else:
+            print(f"[WARNING] Navigation may not be complete: {state}")
+        
+        # Debug: Check what shells are available and their state
+        shells = await self.client.call("listShells", {})
+        print(f"\n[DEBUG] Available shells BEFORE actions: {json.dumps(shells, indent=2)}")
+        
+        state = await self.client.call("getState", {})
+        print(f"\n[DEBUG] Current state: {json.dumps(state, indent=2)}")
+        
+        # Get ALL available actions from the API
+        actions_response = await self.client.call("listActions")
+        available_actions = actions_response.get('actions', [])
+        
+        print(f"\n[INFO] Found {len(available_actions)} available actions")
+        
+        failed_actions = []
+        succeeded_actions = []
+        
+        # Test EVERY SINGLE ACTION that the API says is available
+        for action in available_actions:
+            action_id = action['id']
+                
+            try:
+                # Special handling for toggledualpane - check shells after
+                if action_id == 'toggledualpane':
+                    print(f"  [TESTING] {action_id}: Testing dual pane toggle...")
+                    result = await self.client.call("executeAction", {"actionId": action_id})
+                    print(f"  [OK] {action_id}: {result}")
+                    
+                    # Give UI time to create new pane
+                    await asyncio.sleep(1.0)
+                    
+                    # Check shells after toggle
+                    shells_after = await self.client.call("listShells", {})
+                    print(f"  [DEBUG] Shells AFTER toggledualpane: {len(shells_after['shells'])} shell(s)")
+                    for s in shells_after['shells']:
+                        print(f"    - Shell {s['shellId'][:8]}... active={s['isActive']}, path={s['currentPath']}")
+                else:
+                    result = await self.client.call("executeAction", {"actionId": action_id})
+                    print(f"  [OK] {action_id}: {result}")
+                    
+                succeeded_actions.append(action_id)
+            except RuntimeError as e:
+                print(f"  [FAILED] {action_id}: {e}")
+                failed_actions.append((action_id, str(e)))
+        
+        # Report results
+        print(f"\n[SUMMARY] {len(succeeded_actions)}/{len(available_actions)} actions succeeded")
+        if failed_actions:
+            print(f"[FAILED ACTIONS]: {[f[0] for f in failed_actions]}")
+        
+        # ALL actions that are advertised as available MUST work
+        assert len(failed_actions) == 0, f"{len(failed_actions)} actions failed out of {len(available_actions)}: {[f[0] for f in failed_actions]}"
+    
+    async def test_invalid_action(self):
+        """Test that invalid actions fail properly."""
         try:
             await self.client.call("executeAction", {"actionId": "nonExistentAction"})
+            assert False, "Should have failed with invalid action"
         except RuntimeError:
             pass  # Expected to fail
     

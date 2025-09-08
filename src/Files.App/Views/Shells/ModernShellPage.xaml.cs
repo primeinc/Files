@@ -69,10 +69,11 @@ namespace Files.App.Views.Shells
 				// Create IPC bootstrapper for this shell
 				var registry = Ioc.Default.GetRequiredService<IIpcShellRegistry>();
 				var commService = Ioc.Default.GetRequiredService<IAppCommunicationService>();
-				var actionRegistry = Ioc.Default.GetRequiredService<ActionRegistry>();
+				var commandManager = Ioc.Default.GetRequiredService<ICommandManager>();
 				var methodRegistry = Ioc.Default.GetRequiredService<RpcMethodRegistry>();
 				var bootstrapLogger = Ioc.Default.GetRequiredService<ILogger<ShellIpcBootstrapper>>();
 				var adapterLogger = Ioc.Default.GetRequiredService<ILogger<ShellIpcAdapter>>();
+				var actionAdapterLogger = Ioc.Default.GetRequiredService<ILogger<IpcActionAdapter>>();
 
 				// Get the tab ID - for now we generate a unique ID per shell instance
 				// In the future, this could be retrieved from the parent TabBarItem if it gets a TabId property
@@ -88,11 +89,12 @@ namespace Files.App.Views.Shells
 					windowId,
 					tabId,
 					commService,
-					actionRegistry,
+					commandManager,
 					methodRegistry,
 					DispatcherQueue,
 					bootstrapLogger,
-					adapterLogger);
+					adapterLogger,
+					actionAdapterLogger);
 			}
 			catch (Exception ex)
 			{

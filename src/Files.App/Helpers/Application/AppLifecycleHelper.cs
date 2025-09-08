@@ -266,7 +266,6 @@ namespace Files.App.Helpers
 					.AddSingleton<IWindowsCompatibilityService, WindowsCompatibilityService>()
 					// IPC system
 					.AddSingleton<RpcMethodRegistry>()
-					.AddSingleton<ActionRegistry>()
 					.AddSingleton<WebSocketAppCommunicationService>()
 					.AddSingleton<NamedPipeAppCommunicationService>()
 					.AddSingleton<IAppCommunicationService, MultiTransportCommunicationService>()

@@ -26,6 +26,7 @@ namespace Files.App.Communication
 			Register(new RpcMethod { Name = "handshake", RequiresAuth = false, AllowNotifications = false });
 			Register(new RpcMethod { Name = "getState", RequiresAuth = true, AllowNotifications = false });
 			Register(new RpcMethod { Name = "listActions", RequiresAuth = true, AllowNotifications = false });
+			Register(new RpcMethod { Name = "listShells", RequiresAuth = true, AllowNotifications = false });
 			Register(new RpcMethod { Name = "getMetadata", RequiresAuth = true, AllowNotifications = false, MaxPayloadBytes = 2 * 1024 * 1024 });
 			Register(new RpcMethod { Name = "navigate", RequiresAuth = true, AllowNotifications = false });
 			Register(new RpcMethod { Name = "executeAction", RequiresAuth = true, AllowNotifications = false });

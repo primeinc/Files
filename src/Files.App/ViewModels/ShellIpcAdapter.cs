@@ -10,6 +10,7 @@ using System.Threading;
 using System.IO;
 using Microsoft.Extensions.Logging;
 using Files.App.Data.Contracts;
+using Files.App.Data.Commands;
 
 namespace Files.App.ViewModels
 {
@@ -17,8 +18,9 @@ namespace Files.App.ViewModels
     public sealed class ShellIpcAdapter
     {
         private readonly ShellViewModel _shell;
+        private readonly IShellPage _shellPage;
         private readonly IAppCommunicationService _comm;
-        private readonly ActionRegistry _actions;
+        private readonly IpcActionAdapter _actionAdapter;
         private readonly RpcMethodRegistry _methodRegistry;
         private readonly UIOperationQueue _uiQueue;
         private readonly ILogger<ShellIpcAdapter> _logger;
@@ -26,9 +28,6 @@ namespace Files.App.ViewModels
 
         private readonly TimeSpan _coalesceWindow = TimeSpan.FromMilliseconds(100);
         private DateTime _lastWdmNotif = DateTime.MinValue;
-        
-        // Action handler registry for extensible action execution
-        private readonly Dictionary<string, Func<Task>> _actionHandlers;
 
         // Public methods for IpcCoordinator to call
         public async Task<object> GetStateAsync()
@@ -68,7 +67,7 @@ namespace Files.App.ViewModels
             {
                 try
                 {
-                    var actions = _actions.GetAllowedActions().Select(actionId => new
+                    var actions = _actionAdapter.GetAllowedActions().Select(actionId => new
                     {
                         id = actionId,
                         name = actionId,
@@ -136,31 +135,45 @@ namespace Files.App.ViewModels
 
         public async Task<object> ExecuteActionAsync(string actionId)
         {
-            if (string.IsNullOrEmpty(actionId) || !_actions.CanExecute(actionId))
+            if (string.IsNullOrEmpty(actionId) || !_actionAdapter.CanExecute(actionId))
             {
                 throw new JsonRpcException(JsonRpcException.InvalidParams, "Action not found or cannot execute");
             }
 
+            // Execute on UI thread since commands access UI elements
+            var tcs = new TaskCompletionSource<object>();
+            
             await _uiQueue.EnqueueAsync(async () =>
             {
-                await ExecuteActionById(actionId);
+                try
+                {
+                    // Pass the shell page this adapter is attached to
+                    var result = await _actionAdapter.ExecuteActionAsync(actionId, _shellPage);
+                    tcs.SetResult(result);
+                }
+                catch (Exception ex)
+                {
+                    tcs.SetException(ex);
+                }
             }).ConfigureAwait(false);
-
-            return new { status = "ok" };
+            
+            return await tcs.Task.ConfigureAwait(false);
         }
 
         public ShellIpcAdapter(
             ShellViewModel shell,
+            IShellPage shellPage,
             IAppCommunicationService comm,
-            ActionRegistry actions,
+            IpcActionAdapter actionAdapter,
             RpcMethodRegistry methodRegistry,
             DispatcherQueue dispatcher,
             ILogger<ShellIpcAdapter> logger,
             INavigationStateProvider nav)
         {
             _shell = shell ?? throw new ArgumentNullException(nameof(shell));
+            _shellPage = shellPage ?? throw new ArgumentNullException(nameof(shellPage));
             _comm = comm ?? throw new ArgumentNullException(nameof(comm));
-            _actions = actions ?? throw new ArgumentNullException(nameof(actions));
+            _actionAdapter = actionAdapter ?? throw new ArgumentNullException(nameof(actionAdapter));
             _methodRegistry = methodRegistry ?? throw new ArgumentNullException(nameof(methodRegistry));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _nav = nav ?? throw new ArgumentNullException(nameof(nav));
@@ -168,47 +181,6 @@ namespace Files.App.ViewModels
 
             _shell.WorkingDirectoryModified += Shell_WorkingDirectoryModified;
             _nav.StateChanged += Nav_StateChanged;
-            
-            // Initialize action handlers registry
-            _actionHandlers = new Dictionary<string, Func<Task>>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["refresh"] = async () =>
-                {
-                    await _uiQueue.EnqueueAsync(async () =>
-                    {
-                        _shell.RefreshItems();
-                        await Task.CompletedTask;
-                    });
-                },
-                
-                ["copypath"] = async () =>
-                {
-                    await _uiQueue.EnqueueAsync(async () =>
-                    {
-                        if (!string.IsNullOrEmpty(_shell.WorkingDirectory))
-                        {
-                            var dataPackage = new Windows.ApplicationModel.DataTransfer.DataPackage();
-                            dataPackage.SetText(_shell.WorkingDirectory);
-                            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
-                        }
-                        await Task.CompletedTask;
-                    });
-                },
-                
-                ["toggledualpane"] = async () =>
-                {
-                    _logger.LogInformation("Toggle dual pane requested via IPC");
-                    // This would need proper implementation with the dual pane manager
-                    await Task.CompletedTask;
-                },
-                
-                ["showproperties"] = async () =>
-                {
-                    _logger.LogInformation("Show properties requested via IPC");
-                    // This would need proper implementation with the properties dialog
-                    await Task.CompletedTask;
-                }
-            };
         }
 
         private async void Nav_StateChanged(object? sender, EventArgs e)
@@ -353,28 +325,6 @@ namespace Files.App.ViewModels
             return results;
         }
 
-        private async Task ExecuteActionById(string actionId)
-        {
-            _logger.LogInformation("Executing action: {ActionId}", actionId);
-            
-            // Validate action is allowed
-            if (!_actions.CanExecute(actionId))
-            {
-                _logger.LogWarning("Action {ActionId} is not allowed or cannot execute", actionId);
-                throw new InvalidOperationException($"Action '{actionId}' is not allowed or cannot execute");
-            }
-            
-            // Execute the action using the handler registry
-            if (_actionHandlers.TryGetValue(actionId, out var handler))
-            {
-                await handler();
-            }
-            else
-            {
-                _logger.LogWarning("Action {ActionId} is recognized but not implemented", actionId);
-                throw new NotImplementedException($"Action '{actionId}' is not yet implemented");
-            }
-        }
 
         private async Task NavigateToPathNormalized(string path)
         {

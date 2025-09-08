@@ -52,7 +52,22 @@ namespace Files.App.Views.Shells
 
 		public IFilesystemHelpers FilesystemHelpers { get; protected set; }
 
-		public Type CurrentPageType => ItemDisplay.SourcePageType;
+		public Type CurrentPageType 
+		{
+			get
+			{
+				try
+				{
+					// Frame.SourcePageType throws COM exception if no page is loaded yet
+					return ItemDisplay?.SourcePageType ?? typeof(HomePage);
+				}
+				catch
+				{
+					// Frame not initialized yet, return a default
+					return typeof(HomePage);
+				}
+			}
+		}
 
 		public LayoutPreferencesManager FolderSettings => InstanceViewModel.FolderSettings;
 

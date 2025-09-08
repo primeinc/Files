@@ -29,9 +29,16 @@ namespace Files.App.Actions
 		public Task ExecuteAsync(object? parameter = null)
 		{
 			if (IsOn)
+			{
 				ContentPageContext.ShellPage?.PaneHolder.CloseOtherPane();
-			else
-				ContentPageContext.ShellPage?.PaneHolder.OpenSecondaryPane(ContentPageContext.ShellPage!.ShellViewModel.WorkingDirectory, generalSettingsService.ShellPaneArrangementOption);
+			}
+			else if (ContentPageContext.IsMultiPaneAvailable)
+			{
+				ContentPageContext.ShellPage?.PaneHolder.OpenSecondaryPane(
+					ContentPageContext.ShellPage!.ShellViewModel.WorkingDirectory, 
+					generalSettingsService.ShellPaneArrangementOption);
+			}
+			// If multi-pane is not available (window too narrow), silently do nothing
 
 			return Task.CompletedTask;
 		}

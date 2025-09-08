@@ -192,6 +192,119 @@ namespace Files.App.Communication
             }
         }
 
+        private async Task<object> ListShellsAsync()
+        {
+            try
+            {
+                var allShells = _registry.List();
+                var shellInfos = new List<object>();
+
+                foreach (var shell in allShells)
+                {
+                    try
+                    {
+                        // Get shell state from the adapter
+                        dynamic state = await shell.Adapter.GetStateAsync();
+                        dynamic actions = await shell.Adapter.ListActionsAsync();
+
+                        // Get window information
+                        var windowInfo = GetWindowInfo(shell.AppWindowId);
+                        
+                        var shellInfo = new
+                        {
+                            // Shell identifiers
+                            shellId = shell.ShellId.ToString(),
+                            windowId = shell.AppWindowId,
+                            tabId = shell.TabId.ToString(),
+                            isActive = shell.IsActive,
+                            
+                            // Window information  
+                            window = new
+                            {
+                                pid = System.Diagnostics.Process.GetCurrentProcess().Id, // Current process
+                                title = windowInfo.Title,
+                                isFocused = windowInfo.IsFocused,
+                                bounds = windowInfo.Bounds
+                            },
+                            
+                            // Shell state information
+                            currentPath = (string)(state?.currentPath ?? "Unknown"),
+                            canNavigateBack = (bool)(state?.canNavigateBack ?? false),
+                            canNavigateForward = (bool)(state?.canNavigateForward ?? false),
+                            isLoading = (bool)(state?.isLoading ?? false),
+                            itemCount = (int)(state?.itemCount ?? 0),
+                            
+                            // Available actions for this shell
+                            availableActions = actions?.actions ?? new object[0]
+                        };
+                        
+                        shellInfos.Add(shellInfo);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to get info for shell {ShellId}", shell.ShellId);
+                        // Include shell even if we can't get full info
+                        shellInfos.Add(new
+                        {
+                            shellId = shell.ShellId.ToString(),
+                            windowId = shell.AppWindowId,
+                            tabId = shell.TabId.ToString(),
+                            isActive = shell.IsActive,
+                            error = "Failed to retrieve shell information"
+                        });
+                    }
+                }
+
+                return new { shells = shellInfos };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to list shells");
+                throw new JsonRpcException(JsonRpcException.InternalError, "Failed to enumerate shells");
+            }
+        }
+
+        private (string Title, bool IsFocused, object Bounds) GetWindowInfo(uint appWindowId)
+        {
+            try
+            {
+                // For now, return basic info. We can enhance this later with actual window API calls
+                return (
+                    Title: "Files", // Could get actual window title via Win32 API
+                    IsFocused: appWindowId == _windows.GetActiveWindowId(),
+                    Bounds: new { x = 0, y = 0, width = 1920, height = 1080 } // Placeholder
+                );
+            }
+            catch
+            {
+                return ("Unknown", false, new { x = 0, y = 0, width = 0, height = 0 });
+            }
+        }
+
+        private async Task<object> ExecuteActionOnTargetShellAsync(string actionId, string? targetShellId, ShellIpcAdapter fallbackAdapter)
+        {
+            ShellIpcAdapter targetAdapter = fallbackAdapter;
+            
+            // If a specific shell is requested, find it
+            if (!string.IsNullOrEmpty(targetShellId) && Guid.TryParse(targetShellId, out var shellGuid))
+            {
+                var targetShell = _registry.GetById(shellGuid);
+                if (targetShell == null)
+                {
+                    _logger.LogWarning("Target shell {ShellId} not found", targetShellId);
+                    throw new JsonRpcException(JsonRpcException.InvalidParams, $"Shell '{targetShellId}' not found");
+                }
+                targetAdapter = targetShell.Adapter;
+                _logger.LogInformation("Executing action '{ActionId}' on targeted shell {ShellId}", actionId, targetShellId);
+            }
+            else
+            {
+                _logger.LogInformation("Executing action '{ActionId}' on default shell", actionId);
+            }
+            
+            return await targetAdapter.ExecuteActionAsync(actionId);
+        }
+
         private async Task<object?> DispatchToAdapterAsync(ShellIpcAdapter adapter, JsonRpcMessage request)
         {
             // Call the adapter's public methods directly
@@ -203,6 +316,9 @@ namespace Files.App.Communication
 
                 case "listActions":
                     return await adapter.ListActionsAsync();
+
+                case "listShells":
+                    return await ListShellsAsync();
 
                 case "navigate":
                     if (request.Params.HasValue && request.Params.Value.TryGetProperty("path", out var pathProp))
@@ -237,7 +353,15 @@ namespace Files.App.Communication
                         var actionId = actionIdProp.GetString();
                         if (string.IsNullOrWhiteSpace(actionId))
                             throw new JsonRpcException(JsonRpcException.InvalidParams, "Missing actionId parameter");
-                        return await adapter.ExecuteActionAsync(actionId);
+                            
+                        // Check if a specific shell is targeted
+                        string? targetShellId = null;
+                        if (request.Params.Value.TryGetProperty("targetShellId", out var shellIdProp))
+                        {
+                            targetShellId = shellIdProp.GetString();
+                        }
+                        
+                        return await ExecuteActionOnTargetShellAsync(actionId, targetShellId, adapter);
                     }
                     throw new JsonRpcException(JsonRpcException.InvalidParams, "Missing actionId parameter");
 
