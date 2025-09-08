@@ -145,7 +145,11 @@ namespace Files.App.Communication
                 if (stack.Length > Constants.IpcSettings.StackTraceSanitizationMaxLength)
                 {
                     // Try to keep the most relevant part (usually the top of the stack)
-                    stack = stack[..Constants.IpcSettings.StackTraceSanitizationMaxLength] + "... [truncated]";
+                    // Cut at word boundary for cleaner truncation
+                    var maxLength = Constants.IpcSettings.StackTraceSanitizationMaxLength;
+                    var lastSpace = stack.LastIndexOf(' ', maxLength - 1);
+                    var cutPoint = lastSpace > maxLength * 0.8 ? lastSpace : maxLength; // Use word boundary if not too far back
+                    stack = stack[..cutPoint].TrimEnd() + "... [truncated]";
                 }
             }
             catch

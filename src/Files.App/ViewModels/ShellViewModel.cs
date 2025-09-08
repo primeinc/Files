@@ -1581,7 +1581,7 @@ namespace Files.App.ViewModels
 			if (path.Length > 0)
 			{
 				// Check for shell folder (starts with "::")
-				if (path.StartsWith(Constants.PathValidationConstants.SHELL_FOLDER_PREFIX, StringComparison.Ordinal))
+				if (path.StartsWith(Constants.PathValidationConstants.SHELL_FOLDER_PREFIX, StringComparison.OrdinalIgnoreCase))
 					return true;
 				
 				// Check for MTP device (starts with "mtp:")

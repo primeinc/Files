@@ -380,13 +380,15 @@ namespace Files.App.Helpers
 				if (!string.IsNullOrWhiteSpace(primary.Message))
 				{
 					formattedException.AppendLine("--- MESSAGE ---");
-					formattedException.AppendLine(primary.Message);
+					// Sanitize primary exception message to prevent information disclosure
+					formattedException.AppendLine(SanitizeExceptionMessage(primary.Message));
 				}
 
 				if (!string.IsNullOrWhiteSpace(primary.StackTrace))
 				{
 					formattedException.AppendLine("--- STACKTRACE ---");
-					formattedException.AppendLine(primary.StackTrace);
+					// Sanitize primary stack trace to remove sensitive paths
+					formattedException.AppendLine(SanitizeStackTrace(primary.StackTrace));
 				}
 
 				if (!string.IsNullOrWhiteSpace(primary.Source))
@@ -404,13 +406,23 @@ namespace Files.App.Helpers
 					{
 						if (ReferenceEquals(inner, primary))
 							continue;
-						formattedException.AppendLine($"[{idx++}] {inner.GetType().FullName}: {inner.Message}");
+						
+						// Sanitize inner exception messages to prevent information disclosure
+						var sanitizedMessage = SanitizeExceptionMessage(inner.Message);
+						formattedException.AppendLine($"[{idx++}] {inner.GetType().FullName}: {sanitizedMessage}");
+						
 						if (!string.IsNullOrWhiteSpace(inner.StackTrace))
-							formattedException.AppendLine(inner.StackTrace);
+						{
+							// Sanitize stack traces to remove sensitive paths and information
+							var sanitizedStack = SanitizeStackTrace(inner.StackTrace);
+							formattedException.AppendLine(sanitizedStack);
+						}
 					}
 					if (primary.InnerException is not null && !all.Contains(primary.InnerException))
 					{
-						formattedException.AppendLine($"[Inner] {primary.InnerException}");
+						// Sanitize the ToString() output which may contain sensitive data
+						var sanitizedInner = SanitizeExceptionMessage(primary.InnerException.ToString());
+						formattedException.AppendLine($"[Inner] {sanitizedInner}");
 					}
 				}
 			}
@@ -499,6 +511,58 @@ namespace Files.App.Helpers
 				// Risk mitigation: The restart logic above saves session state before this point.
 				Process.GetCurrentProcess().Kill();
 			}
+		}
+
+		/// <summary>
+		/// Sanitizes exception messages to remove sensitive information like file paths, tokens, and user data.
+		/// </summary>
+		private static string SanitizeExceptionMessage(string? message)
+		{
+			if (string.IsNullOrEmpty(message))
+				return string.Empty;
+
+			// Remove Windows absolute paths (C:\Users\...) 
+			message = System.Text.RegularExpressions.Regex.Replace(message, @"[A-Z]:\\[^""<>|]*", "[path]", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+			
+			// Remove Unix-style paths (/home/user/...)
+			message = System.Text.RegularExpressions.Regex.Replace(message, @"\/[^""<>|]*\/[^""<>| ]+", "[path]");
+			
+			// Remove UNC paths (\\server\share\...)
+			message = System.Text.RegularExpressions.Regex.Replace(message, @"\\\\[^\\""<>|]+\\[^""<>|]*", "[network-path]");
+			
+			// Remove potential tokens/keys (base64-like strings)
+			message = System.Text.RegularExpressions.Regex.Replace(message, @"\b[A-Za-z0-9+/]{20,}={0,2}\b", "[token]");
+			
+			// Remove GUIDs
+			message = System.Text.RegularExpressions.Regex.Replace(message, @"\b[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}\b", "[guid]");
+
+			return message;
+		}
+
+		/// <summary>
+		/// Sanitizes stack traces to remove sensitive file paths and system information.
+		/// </summary>
+		private static string SanitizeStackTrace(string? stackTrace)
+		{
+			if (string.IsNullOrEmpty(stackTrace))
+				return string.Empty;
+
+			// Remove file paths with line numbers (e.g., C:\path\file.cs:line 123)
+			stackTrace = System.Text.RegularExpressions.Regex.Replace(stackTrace, @"[A-Z]:\\[^:""<>|]+\.cs:line \d+", "[source]:line [n]", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+			
+			// Remove Unix paths with line numbers
+			stackTrace = System.Text.RegularExpressions.Regex.Replace(stackTrace, @"\/[^:""<>|]+\.cs:line \d+", "[source]:line [n]");
+			
+			// Remove remaining file paths
+			stackTrace = System.Text.RegularExpressions.Regex.Replace(stackTrace, @"[A-Z]:\\[^""<>|\s]+", "[path]", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+			
+			// Truncate if too long to prevent log flooding
+			if (stackTrace.Length > 2000)
+			{
+				stackTrace = stackTrace.Substring(0, 2000) + "... [truncated]";
+			}
+
+			return stackTrace;
 		}
 
 		/// <summary>

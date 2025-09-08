@@ -39,14 +39,48 @@ namespace Files.App.Communication
         // ✗ System-level operations (format, partition, registry access)
         // ✗ Security-sensitive actions (permissions, encryption, sharing)
         //
-        // Each addition should be security-reviewed against these criteria.
+        // SECURITY REVIEW PROCESS FOR NEW ACTIONS:
+        // ========================================
+        // Before adding any new action to this whitelist, complete ALL steps:
+        //
+        // 1. THREAT ANALYSIS:
+        //    - Could this action delete or modify user data?
+        //    - Could this action access sensitive information?
+        //    - Could this action be used for privilege escalation?
+        //    - Could this action be chained with others maliciously?
+        //
+        // 2. VALIDATION REQUIREMENTS:
+        //    - Does the action validate all inputs?
+        //    - Are path traversal attacks prevented?
+        //    - Are injection attacks (command, SQL, etc.) prevented?
+        //    - Is user consent required for sensitive operations?
+        //
+        // 3. AUDIT LOGGING:
+        //    - Is the action logged with sufficient detail?
+        //    - Can malicious use be detected from logs?
+        //    - Are failed attempts logged?
+        //
+        // 4. TESTING CHECKLIST:
+        //    - Test with malformed inputs
+        //    - Test with path traversal attempts (../, ..\)
+        //    - Test with extremely long inputs
+        //    - Test with special characters and Unicode
+        //    - Test rate limiting behavior
+        //
+        // 5. APPROVAL PROCESS:
+        //    - Document the security rationale in PR description
+        //    - Get security team review for any filesystem operations
+        //    - Update this comment with new action's security notes
+        //
+        // Each addition MUST be security-reviewed against ALL criteria above.
+        // When in doubt, err on the side of caution and REJECT the action.
         private readonly Dictionary<string, CommandCodes> _actionMap = new(StringComparer.OrdinalIgnoreCase)
         {
             ["refresh"] = CommandCodes.RefreshItems,
             ["copypath"] = CommandCodes.CopyPath,
             ["toggledualpane"] = CommandCodes.ToggleDualPane,
             ["showproperties"] = CommandCodes.OpenProperties,
-            // Add more mappings as needed
+            // Add more mappings as needed - MUST follow security review process above
         };
 
         public IpcActionAdapter(ICommandManager commandManager, ILogger<IpcActionAdapter> logger)
@@ -106,6 +140,46 @@ namespace Files.App.Communication
             // FUTURE FIX: Refactor actions to accept an IShellPage parameter instead of using singleton DI,
             // or use scoped DI containers per shell instance. This would eliminate the need for focus manipulation.
             
+            // Local function to handle focus operations (DRY principle)
+            async Task SetFocusWithEventAsync(Microsoft.UI.Xaml.UIElement element, int timeoutMs, string operation, int elementId)
+            {
+                var focusCompleted = new TaskCompletionSource<bool>();
+                
+                void OnFocusReceived(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+                {
+                    focusCompleted.TrySetResult(true);
+                }
+                
+                element.GotFocus += OnFocusReceived;
+                try
+                {
+                    var focusResult = element.Focus(Microsoft.UI.Xaml.FocusState.Programmatic);
+                    if (!focusResult)
+                    {
+                        _logger.LogWarning("{Operation} Focus() returned false for element {ElementId}, action may fail", 
+                            operation, elementId);
+                    }
+                    
+                    // Wait for focus event with timeout
+                    using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
+                    try
+                    {
+                        await focusCompleted.Task.WaitAsync(cts.Token);
+                        _logger.LogDebug("{Operation} focus completed for element {ElementId}", operation, elementId);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        _logger.LogWarning("{Operation} focus did not complete within timeout for element {ElementId}", 
+                            operation, elementId);
+                        // Continue anyway - focus might still be processing
+                    }
+                }
+                finally
+                {
+                    element.GotFocus -= OnFocusReceived;
+                }
+            }
+            
             IShellPage? previousActivePane = null;
             bool shouldRestoreFocus = false;
             
@@ -125,42 +199,8 @@ namespace Files.App.Communication
                         shouldRestoreFocus = true;
                         
                         // Wait for focus to complete using event-driven approach
-                        var focusCompleted = new TaskCompletionSource<bool>();
-                        
-                        void OnGotFocus(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
-                        {
-                            focusCompleted.TrySetResult(true);
-                        }
-                        
-                        uiElement.GotFocus += OnGotFocus;
-                        try
-                        {
-                            var focusResult = uiElement.Focus(Microsoft.UI.Xaml.FocusState.Programmatic);
-                            if (!focusResult)
-                            {
-                                _logger.LogWarning("Focus() returned false for shell {ShellId}, action may fail", 
-                                    targetShell.GetHashCode());
-                            }
-                            
-                            // Wait for focus event with timeout (500ms should be plenty even on slow systems)
-                            // If focus completes faster, we continue immediately
-                            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
-                            try
-                            {
-                                await focusCompleted.Task.WaitAsync(cts.Token);
-                                _logger.LogDebug("Focus completed for shell {ShellId}", targetShell.GetHashCode());
-                            }
-                            catch (OperationCanceledException)
-                            {
-                                _logger.LogWarning("Focus did not complete within timeout for shell {ShellId}", 
-                                    targetShell.GetHashCode());
-                                // Continue anyway - focus might still be processing
-                            }
-                        }
-                        finally
-                        {
-                            uiElement.GotFocus -= OnGotFocus;
-                        }
+                        // 500ms should be plenty even on slow systems
+                        await SetFocusWithEventAsync(uiElement, 500, "Setting", targetShell.GetHashCode());
                     }
                 }
             }
@@ -213,40 +253,8 @@ namespace Files.App.Communication
                     if (previousActivePane is Microsoft.UI.Xaml.UIElement previousUiElement)
                     {
                         // Use same event-driven approach for restore
-                        var restoreCompleted = new TaskCompletionSource<bool>();
-                        
-                        void OnRestoreFocus(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
-                        {
-                            restoreCompleted.TrySetResult(true);
-                        }
-                        
-                        previousUiElement.GotFocus += OnRestoreFocus;
-                        try
-                        {
-                            var restoreResult = previousUiElement.Focus(Microsoft.UI.Xaml.FocusState.Programmatic);
-                            if (!restoreResult)
-                            {
-                                _logger.LogWarning("Focus restore failed for pane {PaneId}", 
-                                    previousActivePane.GetHashCode());
-                            }
-                            
-                            // Shorter timeout for restore since it's less critical
-                            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
-                            try
-                            {
-                                await restoreCompleted.Task.WaitAsync(cts.Token);
-                            }
-                            catch (OperationCanceledException)
-                            {
-                                // Not critical if restore times out
-                                _logger.LogDebug("Focus restore timed out for pane {PaneId}", 
-                                    previousActivePane.GetHashCode());
-                            }
-                        }
-                        finally
-                        {
-                            previousUiElement.GotFocus -= OnRestoreFocus;
-                        }
+                        // Shorter timeout for restore since it's less critical (200ms)
+                        await SetFocusWithEventAsync(previousUiElement, 200, "Restoring", previousActivePane.GetHashCode());
                     }
                 }
             }
