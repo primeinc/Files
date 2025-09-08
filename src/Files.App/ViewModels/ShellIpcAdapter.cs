@@ -26,6 +26,9 @@ namespace Files.App.ViewModels
 
         private readonly TimeSpan _coalesceWindow = TimeSpan.FromMilliseconds(100);
         private DateTime _lastWdmNotif = DateTime.MinValue;
+        
+        // Action handler registry for extensible action execution
+        private readonly Dictionary<string, Func<Task>> _actionHandlers;
 
         // Public methods for IpcCoordinator to call
         public async Task<object> GetStateAsync()
@@ -165,6 +168,47 @@ namespace Files.App.ViewModels
 
             _shell.WorkingDirectoryModified += Shell_WorkingDirectoryModified;
             _nav.StateChanged += Nav_StateChanged;
+            
+            // Initialize action handlers registry
+            _actionHandlers = new Dictionary<string, Func<Task>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["refresh"] = async () =>
+                {
+                    await _uiQueue.EnqueueAsync(async () =>
+                    {
+                        _shell.RefreshItems();
+                        await Task.CompletedTask;
+                    });
+                },
+                
+                ["copypath"] = async () =>
+                {
+                    await _uiQueue.EnqueueAsync(async () =>
+                    {
+                        if (!string.IsNullOrEmpty(_shell.WorkingDirectory))
+                        {
+                            var dataPackage = new Windows.ApplicationModel.DataTransfer.DataPackage();
+                            dataPackage.SetText(_shell.WorkingDirectory);
+                            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
+                        }
+                        await Task.CompletedTask;
+                    });
+                },
+                
+                ["toggledualpane"] = async () =>
+                {
+                    _logger.LogInformation("Toggle dual pane requested via IPC");
+                    // This would need proper implementation with the dual pane manager
+                    await Task.CompletedTask;
+                },
+                
+                ["showproperties"] = async () =>
+                {
+                    _logger.LogInformation("Show properties requested via IPC");
+                    // This would need proper implementation with the properties dialog
+                    await Task.CompletedTask;
+                }
+            };
         }
 
         private async void Nav_StateChanged(object? sender, EventArgs e)
@@ -320,48 +364,15 @@ namespace Files.App.ViewModels
                 throw new InvalidOperationException($"Action '{actionId}' is not allowed or cannot execute");
             }
             
-            // Execute the action based on its ID
-            // Note: In a full implementation, this would delegate to the Files command system
-            switch (actionId?.ToLowerInvariant())
+            // Execute the action using the handler registry
+            if (_actionHandlers.TryGetValue(actionId, out var handler))
             {
-                case "refresh":
-                    // Trigger a refresh of the current view
-                    await _uiQueue.EnqueueAsync(async () =>
-                    {
-                        _shell.RefreshItems();
-                        await Task.CompletedTask;
-                    });
-                    break;
-                    
-                case "copypath":
-                    // Copy current path to clipboard
-                    await _uiQueue.EnqueueAsync(async () =>
-                    {
-                        if (!string.IsNullOrEmpty(_shell.WorkingDirectory))
-                        {
-                            var dataPackage = new Windows.ApplicationModel.DataTransfer.DataPackage();
-                            dataPackage.SetText(_shell.WorkingDirectory);
-                            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
-                        }
-                        await Task.CompletedTask;
-                    });
-                    break;
-                    
-                case "toggledualpane":
-                    // Toggle dual pane view
-                    _logger.LogInformation("Toggle dual pane requested via IPC");
-                    // This would need proper implementation with the dual pane manager
-                    break;
-                    
-                case "showproperties":
-                    // Show properties for selected items
-                    _logger.LogInformation("Show properties requested via IPC");
-                    // This would need proper implementation with the properties dialog
-                    break;
-                    
-                default:
-                    _logger.LogWarning("Action {ActionId} is recognized but not implemented", actionId);
-                    throw new NotImplementedException($"Action '{actionId}' is not yet implemented");
+                await handler();
+            }
+            else
+            {
+                _logger.LogWarning("Action {ActionId} is recognized but not implemented", actionId);
+                throw new NotImplementedException($"Action '{actionId}' is not yet implemented");
             }
         }
 

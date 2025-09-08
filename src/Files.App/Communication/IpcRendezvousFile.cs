@@ -109,10 +109,22 @@ namespace Files.App.Communication
                         {
                             File.Move(tmp, path);
                         }
-                        catch (IOException)
+                        catch (IOException ex)
                         {
-                            // If move failed because file exists, use Replace for atomic update
-                            File.Replace(tmp, path, null); // null backup means no backup
+                            // Only handle "file exists" error, rethrow otherwise
+                            const int ERROR_FILE_EXISTS = 0x50; // 80 decimal
+                            const int ERROR_ALREADY_EXISTS = 0xB7; // 183 decimal
+                            int errorCode = ex.HResult & 0xFFFF;
+                            
+                            if (errorCode == ERROR_FILE_EXISTS || errorCode == ERROR_ALREADY_EXISTS)
+                            {
+                                // If move failed because file exists, use Replace for atomic update
+                                File.Replace(tmp, path, null); // null backup means no backup
+                            }
+                            else
+                            {
+                                throw;
+                            }
                         }
                         Secure(path);
                     }

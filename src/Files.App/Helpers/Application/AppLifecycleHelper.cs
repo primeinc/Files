@@ -350,7 +350,10 @@ namespace Files.App.Helpers
 					ex.Data[Mechanism.HandledKey] = false;
 					ex.Data[Mechanism.MechanismKey] = "Application.UnhandledException";
 				}
-				catch { /* ignore metadata failures */ }
+				catch (Exception exData)
+				{
+					App.Logger?.LogTrace(exData, "Failed to set exception data for Sentry");
+				}
 
 				// Capture with highest severity
 				SentrySdk.CaptureException(ex, scope =>
@@ -461,7 +464,10 @@ namespace Files.App.Helpers
 						{
 							await Launcher.LaunchUriAsync(new Uri("files-dev:"));
 						}
-						catch { }
+						catch (Exception ex)
+						{
+							App.Logger?.LogError(ex, "Failed to restart app via Launcher.LaunchUriAsync after crash.");
+						}
 					})
 					.Wait(100);
 				}

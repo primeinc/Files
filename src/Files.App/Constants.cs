@@ -161,6 +161,8 @@ namespace Files.App
 			public const int GetMetadataMaxItems = 500;
 			
 			public const int GetMetadataTimeoutSec = 30;
+			
+			public const int StackTraceSanitizationMaxLength = 300; // Max characters for sanitized stack traces
 		}
 
 		public static class LocalSettings

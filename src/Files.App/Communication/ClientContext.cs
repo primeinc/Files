@@ -222,13 +222,24 @@ namespace Files.App.Communication
 		}
 
 		// Helper: Drop oldest notification of specific method
-		// NOTE: This method has O(n) complexity where n is the queue size, as it must
-		// rebuild the queue to remove an item from the middle. This is intentionally
-		// accepted because:
+		// DESIGN DECISION: O(n) Complexity is Intentional
+		// ================================================
+		// This method has O(n) complexity where n is the queue size, as it must rebuild
+		// the queue to remove an item from the middle. This is a deliberate trade-off:
+		// 
+		// WHY WE ACCEPT O(n):
 		// 1. ConcurrentQueue provides thread-safety which is critical for our multi-threaded IPC
 		// 2. This operation only occurs when the queue is full (rare in normal operation)
-		// 3. Queue size is bounded by MaxQueuedBytes, keeping n relatively small
+		// 3. Queue size is bounded by MaxQueuedBytes (2MB), keeping n relatively small (~100-1000 items)
 		// 4. Alternative data structures (e.g., LinkedList) would require complex synchronization
+		//
+		// ALTERNATIVES CONSIDERED:
+		// - LinkedList: Would allow O(1) removal but requires manual locking, increasing complexity
+		// - Priority queue: Overkill for our use case, adds unnecessary overhead
+		// - Custom circular buffer: More complex, harder to maintain
+		//
+		// CONCLUSION: The simplicity and thread-safety of ConcurrentQueue outweighs the 
+		// occasional O(n) operation when the queue is full.
 		private bool DropOldestNotificationOfMethod(string targetMethod)
 		{
 			var tempQueue = new System.Collections.Generic.List<(string payload, string method)>();

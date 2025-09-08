@@ -66,7 +66,8 @@ namespace Files.App.Communication
                 // Collapse whitespace
                 stack = WhitespaceRegex().Replace(stack, " ");
                 // Keep it reasonably small
-                if (stack.Length > 300) stack = stack[..300] + "...";
+                if (stack.Length > Constants.IpcSettings.StackTraceSanitizationMaxLength) 
+                    stack = stack[..Constants.IpcSettings.StackTraceSanitizationMaxLength] + "...";
             }
             catch { stack = string.Empty; }
             return ex.GetType().Name + ": " + ex.Message + (string.IsNullOrEmpty(stack) ? string.Empty : "; stack: " + stack);

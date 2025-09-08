@@ -51,7 +51,7 @@ namespace Files.App.ViewModels
 		// Cache configuration constants
 		private const int PathCacheMaxSize = 100;
 		private const int PathCacheCleanupBatchSize = 20;
-		private const int PathCacheCleanupProbability = 100; // 1 in 100 chance
+		private const int PathCacheCleanupThreshold = 150; // Cleanup when cache exceeds this size (50% over max)
 		private const double PathCacheExpirationSeconds = 2.0;
 
 		private Task? aProcessQueueAction;
@@ -1603,8 +1603,8 @@ namespace Files.App.ViewModels
 				(exists, now), 
 				(_, _) => (exists, now));
 
-			// Clean up old cache entries periodically
-			if (pathValidationCache.Count > PathCacheMaxSize && Random.Shared.Next(PathCacheCleanupProbability) == 0)
+			// Clean up old cache entries deterministically when threshold exceeded
+			if (pathValidationCache.Count > PathCacheCleanupThreshold)
 			{
 				var expiredKeys = pathValidationCache
 					.Where(kvp => (now - kvp.Value.checkedAt).TotalSeconds > PathCacheExpirationSeconds * 2)
