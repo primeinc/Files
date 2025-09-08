@@ -1712,7 +1712,7 @@ namespace Files.App.ViewModels
 			var stopwatch = new Stopwatch();
 			stopwatch.Start();
 
-			var isRecycleBin = path.StartsWith(Constants.UserEnvironmentPaths.RecycleBinPath, StringComparison.Ordinal);
+			var isRecycleBin = path.StartsWith(Constants.UserEnvironmentPaths.RecycleBinPath, StringComparison.OrdinalIgnoreCase);
 			var enumerated = await EnumerateItemsFromStandardFolderAsync(path, addFilesCTS.Token, library);
 
 			// Hide progressbar after enumeration

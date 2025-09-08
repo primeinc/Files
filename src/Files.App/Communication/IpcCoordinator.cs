@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using Files.App.ViewModels;
 using Files.App.Data.Contracts;
 using System.Text.RegularExpressions;
+using System.Runtime.InteropServices;
+using System.Text;
 
 namespace Files.App.Communication
 {
@@ -21,9 +23,17 @@ namespace Files.App.Communication
         private const int ERROR_SHELL_LIST = -32003; // Failed to enumerate shells
         
         // Source-generated regex patterns for stack trace sanitization (compile-time optimization for .NET 7+)
-        // Matches Windows paths (C:\...\file.cs:line N), Linux/Mac paths (/home/.../file.cs:line N), and UNC paths
-        [GeneratedRegex(@"(?:[A-Z]:\\[^:""<>|]+\.cs:line \d+|/[^:""<>|]+\.cs:line \d+|\\\\[^\\:""<>|]+\\[^:""<>|]+\.cs:line \d+)", RegexOptions.IgnoreCase)]
-        private static partial Regex FilePathRegex();
+        // Windows absolute paths (C:\path\file.cs:line N)
+        [GeneratedRegex(@"[A-Z]:\\[^:""<>|]+\.cs:line \d+", RegexOptions.IgnoreCase)]
+        private static partial Regex WindowsPathRegex();
+        
+        // Unix-style paths (/path/file.cs:line N)
+        [GeneratedRegex(@"/[^:""<>|]+\.cs:line \d+")]
+        private static partial Regex UnixPathRegex();
+        
+        // UNC network paths (\\server\share\file.cs:line N)
+        [GeneratedRegex(@"\\\\[^\\:""<>|]+\\[^:""<>|]+\.cs:line \d+", RegexOptions.IgnoreCase)]
+        private static partial Regex UncPathRegex();
         
         // Matches GUIDs in standard format
         [GeneratedRegex(@"\b[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}\b")]
@@ -40,6 +50,25 @@ namespace Files.App.Communication
         
         [GeneratedRegex(@"\s+")]
         private static partial Regex WhitespaceRegex();
+        
+        // Win32 API for window bounds retrieval
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+        
+        [DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+        
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+        
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
         
         private readonly IIpcShellRegistry _registry;
         private readonly IAppCommunicationService _comm;
@@ -85,7 +114,9 @@ namespace Files.App.Communication
             try
             {
                 // Remove all file paths (Windows, Linux, Mac, UNC) - these reveal directory structure
-                stack = FilePathRegex().Replace(stack, "[path]:[line]");
+                stack = WindowsPathRegex().Replace(stack, "[path]:[line]");
+                stack = UnixPathRegex().Replace(stack, "[path]:[line]");
+                stack = UncPathRegex().Replace(stack, "[path]:[line]");
                 
                 // Remove GUIDs which might be correlation IDs or sensitive identifiers
                 stack = GuidRegex().Replace(stack, "[guid]");
@@ -348,16 +379,54 @@ namespace Files.App.Communication
         {
             try
             {
-                // For now, return basic info. We can enhance this later with actual window API calls
+                // Get the actual window handle from MainWindow
+                var hWnd = MainWindow.Instance?.WindowHandle ?? IntPtr.Zero;
+                if (hWnd == IntPtr.Zero)
+                {
+                    return (
+                        Title: "Files",
+                        IsFocused: false,
+                        Bounds: new { x = 0, y = 0, width = 0, height = 0, error = "No window handle" }
+                    );
+                }
+
+                // Get actual window title using Win32 API
+                var titleBuilder = new StringBuilder(256);
+                GetWindowText(hWnd, titleBuilder, titleBuilder.Capacity);
+                var title = titleBuilder.ToString();
+                if (string.IsNullOrEmpty(title))
+                    title = "Files";
+
+                // Get actual window bounds using Win32 API
+                if (!GetWindowRect(hWnd, out RECT rect))
+                {
+                    return (
+                        Title: title,
+                        IsFocused: appWindowId == _windows.GetActiveWindowId(),
+                        Bounds: new { x = 0, y = 0, width = 0, height = 0, error = "GetWindowRect failed" }
+                    );
+                }
+
+                // Check if this window is currently focused
+                var foregroundWindow = GetForegroundWindow();
+                var isFocused = (hWnd == foregroundWindow) || (appWindowId == _windows.GetActiveWindowId());
+
                 return (
-                    Title: "Files", // Could get actual window title via Win32 API
-                    IsFocused: appWindowId == _windows.GetActiveWindowId(),
-                    Bounds: new { x = 0, y = 0, width = 1920, height = 1080 } // Placeholder
+                    Title: title,
+                    IsFocused: isFocused,
+                    Bounds: new 
+                    { 
+                        x = rect.Left, 
+                        y = rect.Top, 
+                        width = rect.Right - rect.Left, 
+                        height = rect.Bottom - rect.Top 
+                    }
                 );
             }
-            catch
+            catch (Exception ex)
             {
-                return ("Unknown", false, new { x = 0, y = 0, width = 0, height = 0 });
+                _logger.LogError(ex, "Failed to get window info for window ID {WindowId}", appWindowId);
+                return ("Files", false, new { x = 0, y = 0, width = 0, height = 0, error = ex.Message });
             }
         }
 

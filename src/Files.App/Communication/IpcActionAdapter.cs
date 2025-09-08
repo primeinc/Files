@@ -17,8 +17,29 @@ namespace Files.App.Communication
         private readonly ICommandManager _commandManager;
         private readonly ILogger<IpcActionAdapter> _logger;
         
-        // Map of IPC action strings to CommandCodes
-        // This serves as our whitelist - only these actions are allowed via IPC
+        // SECURITY: Limited Action Whitelist for IPC
+        // ==========================================
+        // This whitelist intentionally restricts which commands can be executed via IPC for security:
+        //
+        // SECURITY RATIONALE:
+        // 1. **Defense in Depth**: Even if IPC authentication is bypassed, damage is limited
+        // 2. **Principle of Least Privilege**: Only expose necessary functionality to external processes
+        // 3. **Attack Surface Reduction**: Prevents exploitation of sensitive file operations
+        //
+        // THREATS MITIGATED:
+        // - Malicious processes executing destructive file operations (delete, move, format)
+        // - Unauthorized access to sensitive system folders or files
+        // - Exploitation of file management commands for privilege escalation
+        // - Automation of harmful batch operations
+        //
+        // CRITERIA FOR ADDING NEW ACTIONS:
+        // ✓ Read-only or safe operations (view, copy path, refresh)
+        // ✓ Non-destructive UI actions (toggle panes, show properties)
+        // ✗ File system modifications (delete, move, rename, create)
+        // ✗ System-level operations (format, partition, registry access)
+        // ✗ Security-sensitive actions (permissions, encryption, sharing)
+        //
+        // Each addition should be security-reviewed against these criteria.
         private readonly Dictionary<string, CommandCodes> _actionMap = new(StringComparer.OrdinalIgnoreCase)
         {
             ["refresh"] = CommandCodes.RefreshItems,

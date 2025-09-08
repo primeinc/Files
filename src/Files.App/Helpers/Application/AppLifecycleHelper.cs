@@ -479,6 +479,21 @@ namespace Files.App.Helpers
 			{
 				// Give Sentry a brief moment to flush events (best effort, non-blocking long)
 				try { SentrySdk.FlushAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult(); } catch { }
+				
+				// DESIGN DECISION: Abrupt Process Termination
+				// ============================================
+				// We use Process.Kill() instead of Environment.Exit() or Application.Exit() because:
+				// 1. This is an unhandled exception handler - the app state may be corrupted
+				// 2. Graceful shutdown methods might hang or fail in corrupted state
+				// 3. We've already attempted restart and logged telemetry - immediate termination is safest
+				// 4. Any important data should have been saved during the restart attempt above
+				// 
+				// Alternative approaches considered:
+				// - Environment.Exit(): May hang if finalizers are corrupted
+				// - Application.Exit(): May not work if UI thread is corrupted
+				// - Natural termination: May leave process hanging indefinitely
+				//
+				// Risk mitigation: The restart logic above saves session state before this point.
 				Process.GetCurrentProcess().Kill();
 			}
 		}

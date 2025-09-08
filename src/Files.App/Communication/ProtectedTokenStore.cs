@@ -34,18 +34,7 @@ namespace Files.App.Communication
 				return true;
 			}
 
-			// Check if we're auto-enabling ONLY because of debug mode
-			// This is the security risk - IPC enabled without user consent
-			if (System.Diagnostics.Debugger.IsAttached && IpcConfig.EnableIpcInDebugMode)
-			{
-				// Log once that IPC is auto-enabled for debugging
-				App.Logger?.LogWarning("[IPC] Auto-enabled in debug mode (not user-configured)");
-				System.Diagnostics.Debug.WriteLine("[IPC] Auto-enabled for debugging - tokens readable by other processes");
-				
-				return true;
-			}
-
-			return false; // production default remains disabled until explicitly enabled by user
+			return false; // IPC remains disabled until explicitly enabled by user
 		}
 
 		public static void SetEnabled(bool enabled) => Settings.Values[KEY_ENABLED] = enabled;

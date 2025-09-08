@@ -400,8 +400,6 @@ class UnifiedIpcTester:
             state = await self.client.call("getState", {})
             if not state.get("isLoading", True) and state.get("itemCount", 0) > 0:
                 print(f"[DEBUG] Navigation complete after {(i+1)*0.5}s: {state}")
-                # Give the UI a bit more time to update PageType
-                await asyncio.sleep(0.5)
                 break
         else:
             print(f"[WARNING] Navigation may not be complete: {state}")
